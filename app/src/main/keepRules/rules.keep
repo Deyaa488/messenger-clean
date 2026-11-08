@@ -1,0 +1,15 @@
+# Project-specific R8 keep rules for Custom Messenger WebView Bridge & DTOs.
+# AGP combines all *.keep files in src/main/keepRules automatically.
+
+-keepattributes JavascriptInterface
+
+-keepclassmembers class app.getknit.knit.ui.custom.KnitBridge {
+    @android.webkit.JavascriptInterface <methods>;
+    public *;
+}
+
+-keep class app.getknit.knit.ui.custom.UiUserProfile { *; }
+-keep class app.getknit.knit.ui.custom.UiPeer { *; }
+-keep class app.getknit.knit.ui.custom.UiMessage { *; }
+-keep class app.getknit.knit.ui.custom.UiConversation { *; }
+-keep class app.getknit.knit.ui.custom.UiInitialData { *; }

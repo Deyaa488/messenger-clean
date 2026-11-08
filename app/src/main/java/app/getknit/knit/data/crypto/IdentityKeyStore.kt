@@ -1,0 +1,365 @@
+package app.getknit.knit.data.crypto
+
+import android.util.Log
+import app.getknit.knit.crash.TraceText
+import app.getknit.knit.identity.NodeId
+import app.getknit.knit.mesh.crypto.PublicKeyBundle
+import app.getknit.knit.mesh.crypto.TinkInit
+import app.getknit.knit.mesh.crypto.cryptoCbor
+import app.getknit.knit.mesh.crypto.ratchet.RatchetCrypto
+import com.google.crypto.tink.InsecureSecretKeyAccess
+import com.google.crypto.tink.KeyTemplates
+import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.PublicKeySign
+import com.google.crypto.tink.RegistryConfiguration
+import com.google.crypto.tink.TinkProtoKeysetFormat
+import com.google.crypto.tink.hybrid.HpkePrivateKey
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromByteArray
+import kotlinx.serialization.descriptors.elementNames
+import kotlinx.serialization.encodeToByteArray
+
+/** This device's long-term E2E private keysets plus the public bundle it advertises. */
+data class IdentityKeys(
+    val hybridPrivate: KeysetHandle,
+    val sigPrivate: KeysetHandle,
+    val publicBundle: PublicKeyBundle,
+)
+
+/**
+ * One of this device's ratchet signed prekeys, in publishable form: the raw X25519 public key plus the
+ * detached Ed25519 signature over [RatchetCrypto.spkSigningBytes]. The private half never leaves
+ * [IdentityKeyStore].
+ */
+class SignedPrekey(
+    val id: Int,
+    val pub: ByteArray,
+    val sig: ByteArray,
+    val createdAt: Long,
+)
+
+/**
+ * Generates and persists this device's long-term end-to-end identity keypairs — a Tink **hybrid**
+ * keypair (HPKE/X25519 — wraps v1 per-message content keys to us; its X25519 half doubles as the v2
+ * ratchet DH identity, see [dhIdentityPrivate]) and an **Ed25519** keypair (signs our outbound
+ * frames) — plus the rotating **ratchet signed prekeys** (v2 session bootstrap, X3DH-style). The
+ * private material is serialized, wrapped (AES-256-GCM under a hardware-backed AndroidKeyStore key)
+ * via [KeystoreSecret], and stored in `filesDir/identity.key`.
+ *
+ * This lives **outside** the Room database on purpose: the identity (and the prekeys peers may hold
+ * in-flight session initiations against) must survive anything that takes `knit.db` down — the
+ * [DatabaseKey] lost-wrap wipe path — otherwise every such event would mint a new nodeId and
+ * break peers' pinned keys and decryptability of stored ciphertext.
+ *
+ * Mirrors [DatabaseKey]'s "generate once, transparently load thereafter" lifecycle, and its rule for a failed
+ * unwrap (ADR 2026-10.47rw): a new identity is minted only when there is no file or the old one is proven lost
+ * (kept aside first); a Keystore refusal throws [KeystoreUnavailableException] and caches nothing, so the next
+ * call tries again and finds the same identity. A wrap that opens but does not parse is never a reason to mint: every
+ * peer pins the node id this file certifies. It is unwrapped again first, over [rereadDelaysMs], since a Keystore can
+ * hand back other bytes than it sealed with its tag verified, and what still fails is a crash whose message and frames
+ * carry each read's [CborShape].
+ */
+class IdentityKeyStore(
+    private val secret: KeystoreSecret,
+    private val rereadDelaysMs: List<Long> = KeystoreSecret.RETRY_DELAYS_MS,
+    private val sleep: (Long) -> Unit = Thread::sleep,
+) {
+    @Volatile
+    private var cached: Loaded? = null
+
+    init {
+        TinkInit.ensure()
+    }
+
+    /** Returns the device identity keys, generating and persisting them on first use. */
+    fun keys(): IdentityKeys = loaded().keys
+
+    /**
+     * The raw X25519 scalar of the hybrid identity key, for the v2 ratchet's X3DH derivations. Safe to
+     * reuse across HPKE and X3DH: every ratchet derivation is domain-separated under `knit/dm/v2/...`
+     * labels, disjoint from RFC 9180's.
+     */
+    fun dhIdentityPrivate(): ByteArray =
+        (
+            loaded()
+                .keys.hybridPrivate.primary.key as HpkePrivateKey
+        ).privateKeyBytes
+            .toByteArray(InsecureSecretKeyAccess.get())
+
+    /**
+     * The newest signed prekey in publishable form, minting the first one on demand. Rotation is
+     * [rotatePrekeyIfDue]'s job — callers that publish (the profile path) only ever read this.
+     */
+    @Synchronized
+    fun currentPrekey(now: Long): SignedPrekey {
+        val state = loaded()
+        val newest = state.stored.prekeys?.maxByOrNull { it.id }
+        if (newest != null) return signedPrekey(newest)
+        return signedPrekey(mint(state, now))
+    }
+
+    /**
+     * Mints a fresh signed prekey when the newest is older than [SPK_ROTATE_MS] (or none exists),
+     * pruning retention to the newest [SPK_KEEP]. Returns true when a rotation happened — the caller
+     * must then bump `profileVersion` so the new prekey re-floods. Old privates are retained so
+     * in-flight initiations against a recently superseded prekey still open (~[SPK_KEEP] weeks).
+     *
+     * A prekey that cannot be stored is false too, and the next heal tries again: the old one stands, and a phone that
+     * never had one finds out in [currentPrekey], which throws. Both callers run this inline, the mesh start and the
+     * heal basket, so a throw here would cost every step after it, each time.
+     */
+    @Synchronized
+    @Suppress("TooGenericExceptionCaught") // whatever the Keystore or the disk threw, the old prekey stands
+    fun rotatePrekeyIfDue(now: Long): Boolean {
+        val state = loaded()
+        val newest = state.stored.prekeys?.maxByOrNull { it.id }
+        if (newest != null && now - newest.createdAt < SPK_ROTATE_MS) return false
+        return try {
+            mint(state, now)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "prekey not rotated; trying again at the next heal", e)
+            false
+        }
+    }
+
+    /**
+     * Mints a fresh signed prekey now, whatever the newest one's age — the first start after a backup
+     * restore, where the phone this identity came from may have minted prekeys after the snapshot and a
+     * peer may hold one of those ids against a different public key. The caller bumps `profileVersion`
+     * (a restore does, unconditionally) so the fresh prekey outranks any the old phone published.
+     */
+    @Synchronized
+    fun rotatePrekey(now: Long) {
+        mint(loaded(), now)
+    }
+
+    /** The private half of prekey [id], or null when it has been pruned (initiator must re-init). */
+    @Synchronized
+    fun prekeyPrivFor(id: Int): ByteArray? =
+        loaded()
+            .stored.prekeys
+            ?.firstOrNull { it.id == id }
+            ?.priv
+
+    @Synchronized
+    private fun loaded(): Loaded {
+        cached?.let { return it }
+        val state =
+            when (val read = secret.read()) {
+                is Unwrapped.Present -> {
+                    parseOrReread(read.bytes)
+                }
+
+                Unwrapped.Absent -> {
+                    generateAndStore(freshKey = false)
+                }
+
+                is Unwrapped.Lost -> {
+                    Log.w(TAG, "Identity keys lost (${read.reason}); regenerating", read.cause)
+                    secret.keepAside()
+                    generateAndStore(freshKey = read.reason == Loss.KEY_INVALIDATED)
+                }
+
+                is Unwrapped.Unavailable -> {
+                    throw KeystoreUnavailableException("identity keys", read.cause)
+                }
+            }
+        cached = state
+        return state
+    }
+
+    /**
+     * Parses [first], unwrapping again after each of [rereadDelaysMs] while what opens does not parse. A verified tag
+     * vouches for the bytes, so a parse failure is a bad build or a Keystore handing back other bytes than it sealed:
+     * on Play, 2.9.0, one Redmi Note 14 Pro+ (API 36) opened its identity and failed mid-array, which no build writes.
+     * A glitch on the way out reads right a moment later. A bad build, or bytes altered on the way in, fail every
+     * read; the exception then says whether the reads agreed and what each one looked like, and nothing is minted. Its
+     * frames say it too ([TraceText]): that is the only part of this crash Play keeps, and the phone that needs it
+     * cannot open Diagnostics.
+     */
+    private fun parseOrReread(first: ByteArray): Loaded {
+        val reads = mutableListOf(first)
+        var firstFailure: Throwable? = null
+        var stoppedBy: String? = null
+        for (attempt in 0..rereadDelaysMs.size) {
+            if (attempt > 0) {
+                sleep(rereadDelaysMs[attempt - 1])
+                when (val again = secret.read()) {
+                    is Unwrapped.Present -> reads += again.bytes
+                    else -> stoppedBy = "read ${attempt + 1} ${again.verdict()}"
+                }
+                if (stoppedBy != null) break
+            }
+            val parsed = runCatching { parse(reads.last()) }
+            parsed.getOrNull()?.let { loaded ->
+                if (attempt > 0) Log.w(TAG, "identity parsed on read ${attempt + 1}; the Keystore handed back other bytes before")
+                return loaded
+            }
+            val failure = checkNotNull(parsed.exceptionOrNull())
+            Log.w(TAG, "identity read ${attempt + 1} opened but does not parse", failure)
+            if (firstFailure == null) firstFailure = failure
+        }
+        val described = describeReads(reads, stoppedBy)
+        throw TraceText.carry(
+            IllegalStateException("identity keys unwrapped but do not parse; not minting over them. $described", firstFailure),
+            described,
+        )
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun parse(blob: ByteArray): Loaded {
+        val stored = cryptoCbor.decodeFromByteArray<Stored>(blob)
+        val hybrid = TinkProtoKeysetFormat.parseKeyset(stored.hybridPriv, InsecureSecretKeyAccess.get(), RegistryConfiguration.get())
+        val sig = TinkProtoKeysetFormat.parseKeyset(stored.sigPriv, InsecureSecretKeyAccess.get(), RegistryConfiguration.get())
+        return Loaded(IdentityKeys(hybrid, sig, PublicKeyBundle.fromPrivate(hybrid, sig)), stored)
+    }
+
+    /**
+     * Mints the identity and proves its wrap reads back before anything signs with it: a Keystore that seals but
+     * never opens again would otherwise have the next start read the file as lost and mint a second node id.
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun generateAndStore(freshKey: Boolean): Loaded {
+        val hybrid = KeysetHandle.generateNew(KeyTemplates.get(HYBRID_TEMPLATE).toParameters(), RegistryConfiguration.get())
+        val sig = KeysetHandle.generateNew(KeyTemplates.get(SIG_TEMPLATE).toParameters(), RegistryConfiguration.get())
+        val stored =
+            Stored(
+                hybridPriv = TinkProtoKeysetFormat.serializeKeyset(hybrid, InsecureSecretKeyAccess.get(), RegistryConfiguration.get()),
+                sigPriv = TinkProtoKeysetFormat.serializeKeyset(sig, InsecureSecretKeyAccess.get(), RegistryConfiguration.get()),
+            )
+        val state = Loaded(IdentityKeys(hybrid, sig, PublicKeyBundle.fromPrivate(hybrid, sig)), stored)
+        val blob = cryptoCbor.encodeToByteArray(stored)
+        runCatching { secret.store(blob, freshKey) }.onFailure { throw KeystoreUnavailableException("new identity keys", it) }
+        val back = secret.read()
+        if (back !is Unwrapped.Present || !back.bytes.contentEquals(blob)) {
+            throw KeystoreUnavailableException("new identity keys", (back as? Unwrapped.Unavailable)?.cause)
+        }
+        return state
+    }
+
+    /** Mints prekey `newest.id + 1`, persists the pruned list, and returns the new record. */
+    private fun mint(
+        state: Loaded,
+        now: Long,
+    ): StoredPrekey {
+        val pair = RatchetCrypto.generateKeyPair()
+        val nextId = (state.stored.prekeys?.maxOfOrNull { it.id } ?: 0) + 1
+        val fresh = StoredPrekey(id = nextId, priv = pair.priv, createdAt = now)
+        val kept = (state.stored.prekeys.orEmpty() + fresh).sortedByDescending { it.id }.take(SPK_KEEP)
+        val next = Loaded(state.keys, Stored(state.stored.hybridPriv, state.stored.sigPriv, kept))
+        persist(next)
+        cached = next
+        return fresh
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private fun persist(state: Loaded) {
+        secret.store(cryptoCbor.encodeToByteArray(state.stored))
+    }
+
+    private fun signedPrekey(record: StoredPrekey): SignedPrekey {
+        val pub = RatchetCrypto.publicFromPrivate(record.priv)
+        return SignedPrekey(
+            id = record.id,
+            pub = pub,
+            sig = signer().sign(RatchetCrypto.spkSigningBytes(record.id, pub)),
+            createdAt = record.createdAt,
+        )
+    }
+
+    private fun Unwrapped.verdict(): String =
+        when (this) {
+            is Unwrapped.Lost -> "lost ($reason)"
+            is Unwrapped.Unavailable -> "refused (${cause.javaClass.simpleName})"
+            Unwrapped.Absent -> "found no file"
+            is Unwrapped.Present -> "opened"
+        }
+
+    private fun signer(): PublicKeySign = loaded().keys.sigPrivate.getPrimitive(RegistryConfiguration.get(), PublicKeySign::class.java)
+
+    private class Loaded(
+        val keys: IdentityKeys,
+        val stored: Stored,
+    )
+
+    @Serializable
+    private class Stored(
+        val hybridPriv: ByteArray,
+        val sigPriv: ByteArray,
+        // Additive (nullable): blobs written by older builds parse fine, and cryptoCbor's
+        // ignoreUnknownKeys lets an older build read a newer blob (dropping the prekeys is safe — they
+        // regenerate).
+        val prekeys: List<StoredPrekey>? = null,
+    )
+
+    @Serializable
+    private class StoredPrekey(
+        val id: Int,
+        val priv: ByteArray,
+        val createdAt: Long,
+    )
+
+    companion object {
+        private const val TAG = "IdentityKeyStore"
+
+        /** The AndroidKeyStore alias the identity file is wrapped under, and the file's name in `filesDir`. */
+        const val KEYSTORE_ALIAS = "knit_identity_key"
+        const val FILE_NAME = "identity.key"
+
+        /** Every field name the identity file holds: the only text [CborShape] may print from it. */
+        private val FIELD_NAMES: Set<String> =
+            (Stored.serializer().descriptor.elementNames + StoredPrekey.serializer().descriptor.elementNames).toSet()
+
+        /**
+         * Whether the unparsed [reads] were the same bytes, and the shape of each different one: `3 reads, the same
+         * bytes every time: 1043 B {hybridPriv:[i×92 sigPriv:[i×154]@203 …` says the Keystore keeps answering what it sealed.
+         */
+        private fun describeReads(
+            reads: List<ByteArray>,
+            stoppedBy: String?,
+        ): String {
+            val distinct = mutableListOf<IndexedValue<ByteArray>>()
+            reads.withIndex().forEach { read -> if (distinct.none { it.value.contentEquals(read.value) }) distinct += read }
+            val count = if (reads.size == 1) "1 read" else "${reads.size} reads"
+            val shapes =
+                if (distinct.size == 1) {
+                    val agreement = if (reads.size == 1) "" else ", the same bytes every time"
+                    "$count$agreement: ${CborShape.describe(reads.first(), FIELD_NAMES)}"
+                } else {
+                    "$count, ${distinct.size} different: " +
+                        distinct.joinToString("; ") { (index, bytes) -> "read ${index + 1} ${CborShape.describe(bytes, FIELD_NAMES)}" }
+                }
+            return if (stoppedBy == null) shapes else "$shapes; $stoppedBy"
+        }
+
+        /**
+         * The node id the identity in [blob] (a [KeystoreSecret]'s plaintext, as [keys] would load it)
+         * certifies — parsed without persisting anything, so a backup restore can check the identity it is
+         * about to install against its manifest. Throws on a blob that is not an identity, and never mints or
+         * stores anything — which is exactly what a verification must never do.
+         */
+        @OptIn(ExperimentalSerializationApi::class)
+        fun nodeIdOf(blob: ByteArray): String {
+            TinkInit.ensure()
+            val stored = cryptoCbor.decodeFromByteArray<Stored>(blob)
+            val hybrid = TinkProtoKeysetFormat.parseKeyset(stored.hybridPriv, InsecureSecretKeyAccess.get(), RegistryConfiguration.get())
+            val sig = TinkProtoKeysetFormat.parseKeyset(stored.sigPriv, InsecureSecretKeyAccess.get(), RegistryConfiguration.get())
+            return NodeId.fromPublicKeyBundle(PublicKeyBundle.fromPrivate(hybrid, sig).encoded)
+        }
+
+        // HPKE with X25519 + HKDF-SHA256 + AES-256-GCM (Tink's own impl; works on minSdk 29). The _RAW
+        // (NO_PREFIX) variants emit bare RFC 9180 wrapped keys (`enc‖ct`) and RFC 8032 signatures (64 B) —
+        // no 5-byte Tink output prefix — so the wire is Tink-free and iOS-interoperable (the launch-baseline
+        // wire layout; see PublicKeyBundle + docs/WIRE_COMPAT.md). Changing these re-mints every nodeId.
+        private const val HYBRID_TEMPLATE = "DHKEM_X25519_HKDF_SHA256_HKDF_SHA256_AES_256_GCM_RAW"
+        private const val SIG_TEMPLATE = "ED25519_RAW"
+
+        /** Signed-prekey rotation cadence; the PFS horizon of session *initiations* (design doc §prekeys). */
+        private const val SPK_ROTATE_MS = 7 * 24 * 60 * 60_000L
+
+        /** Prekey privates retained (current + 4 predecessors ≈ 35 days of initiation lateness). */
+        private const val SPK_KEEP = 5
+    }
+}

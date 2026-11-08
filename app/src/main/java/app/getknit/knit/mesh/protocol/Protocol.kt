@@ -1,0 +1,361 @@
+package app.getknit.knit.mesh.protocol
+
+import app.getknit.knit.identity.NodeId
+import java.util.Locale
+
+/**
+ * The mesh protocol version and capability registry, plus the codec for the endpoint-info advert string.
+ *
+ * A peer advertises `nodeId|version|capabilitiesHex` in its discovery advert ([advertise]) — the Wi-Fi
+ * Aware `serviceSpecificInfo` or the BLE service-data payload; a peer
+ * that only knows the bare nodeId (a legacy/unknown build) parses to version 0 / no capabilities
+ * ([parse], which never throws, and reads a non-canonical nodeId as null). This is the *unauthenticated*
+ * connection-time hint — known before a single frame flows — used only as a routing/degradation signal, never for trust (trust stays on the
+ * signature path). The same [VERSION]/[capabilities][LOCAL_CAPABILITIES] also ride, authenticated, on
+ * [ProfileContent] so a peer reachable only via relay still learns them.
+ *
+ * Pure (no Android), so it is JVM-unit-testable alongside the other `mesh/protocol` logic.
+ *
+ * Append-only: [CAP_*] bit positions are never reused and [VERSION] only increases.
+ */
+object Protocol {
+    /** This build's protocol/handshake version, advertised in endpoint-info and [ProfileContent]. */
+    const val VERSION = 1 // launch baseline; bump on a breaking wire change — see docs/WIRE_COMPAT.md
+
+    /** Lowest peer version we still interoperate with (reserved for future route-around; unused today). */
+    const val MIN_SUPPORTED = 1
+
+    /**
+     * How far a peer's signed `sentAt` may lead our local clock before we treat it as bogus future-dating
+     * rather than honest clock skew. `sentAt` is self-attested and unverifiable, yet it is *also* the
+     * frame-global custody eviction key and the local sort key, so an unbounded future value is a weapon:
+     * a custody frame future-dated past this window is refused at store time
+     * ([app.getknit.knit.data.forward.ForwardRepository.store]) so it can't become un-sweepable and win
+     * every oldest-by-`sentAt` eviction (a handful of Sybil identities would otherwise displace all honest
+     * custody mesh-wide), and an inbound chat's stored `sentAt` is clamped to it
+     * ([app.getknit.knit.mesh.InboundPipeline.deliverChat]) so a future-dated frame can't pin itself to the
+     * top of a conversation forever. The same clamp bounds every other sender-supplied number the pipeline
+     * keeps as a last-writer-wins watermark — a profile version (both the cleartext frame and the sealed
+     * ctl), a reaction's stamp, a group's name and photo clocks, a member's leave and rejoin
+     * (`InboundPipeline.clampFuture`) — because stored raw, one far-future value outranks every honest
+     * update after it for good, including the sender's own. 5 min tolerates an unsynced device without
+     * giving an attacker a usable window. Every node compares against its own `now`, exactly like the
+     * dead-on-arrival lower bound, so an honest frame (`sentAt ≈ now`) passes on every node and only the
+     * attacker's window closes.
+     */
+    const val MAX_FUTURE_SKEW_MS = 5 * 60_000L
+
+    /** Capability bits (append-only — never recycle a position). */
+    const val CAP_E2E = 0x1L
+    const val CAP_GROUPS = 0x2L
+    const val CAP_REACTIONS = 0x4L
+    const val CAP_STORE_FORWARD = 0x8L
+
+    /**
+     * The ratchet schemes — crypto scheme v2's DM form (docs/FORWARD_SECRECY_RATCHET.md) AND its group
+     * sender-key form (docs/GROUP_FORWARD_SECRECY.md); one bit because both ship in the same release
+     * (the group form folded into the unreleased v2 bump — a build with one always has both). Unlike
+     * the bits above this one is a send-time input: outbound v2 requires the pinned profile to carry
+     * it AND a valid `ProfileContent.prekey` (they arrive on one signed frame — the stale-capability
+     * mitigation); a group send requires that of EVERY other member (the epoch seeds ride the
+     * pairwise DM sessions).
+     */
+    const val CAP_RATCHET = 0x10L
+
+    /**
+     * The compact coordination-plane framing (`mesh/link/FastFrameCodec`): this build accepts the
+     * `0x03` compact / `0x04` fragment fast-path message tags. Gates only the *encoding* a sender
+     * picks toward this peer (compact vs the legacy `0x01` CBOR framing) — a transport-local routing
+     * hint like every advert bit, consumed from the SSI advert copy, never a trust input. Receivers
+     * accept all tags unconditionally, so a stale bit degrades to a lost best-effort message at worst.
+     */
+    const val CAP_FAST_COMPACT = 0x20L
+
+    /**
+     * Inline delivery acks (ADR 054): this build applies `MessageContent.acks` on a **plain** sealed DM chat,
+     * not only on a `CTL_RECEIPT`, so a reply can carry the receipts its author owes the recipient in place
+     * of a standalone tick (over LoRa a tick costs as much air as the message). A send-time input like
+     * [CAP_RATCHET]: a sender attaches acks only toward a pinned profile carrying this bit, and an older
+     * receiver — which reads the field only on a ctl frame — is never sent one, so its ✓✓ still arrives as
+     * a tick. Additive per docs/WIRE_COMPAT.md: an existing field populated in a new case, gated on a bit.
+     */
+    const val CAP_INLINE_ACK = 0x40L
+
+    /**
+     * The transcoded fast-path framing (`mesh/link/FrameTranscoder`, ADR 060): this build decodes the `0x05`
+     * tag — a schema-aware re-encoding of a frame's signed bytes that the receiver rebuilds byte-exact before
+     * verifying the signature. Gates only the *encoding* a sender picks toward this peer, exactly like
+     * [CAP_FAST_COMPACT]: consumed from the SSI advert copy, never a trust input, and receivers accept every
+     * tag unconditionally. This is the last capability bit a BLE advert carries (`BleAdvertPayload.CAP_MASK`),
+     * spent here because the adverts are where a transport-local encoding choice is read; bits from 0x100 up
+     * ride the pinned profile and the Wi-Fi Aware advert only.
+     */
+    const val CAP_FRAME_TRANSCODE = 0x80L
+
+    /**
+     * Crypto scheme v3 (ADR 059): this build opens a `EncEnvelope.v = 3` DM — derived nonce, labeled
+     * compact plaintext — and accepts the **unsigned** `relay = false` sealed delivery tick that form makes
+     * possible. A send-time input exactly like [CAP_RATCHET]: a sender seals v3 only toward a pinned profile
+     * carrying this bit **and** [CAP_RATCHET] (one signed frame carries both plus the prekey — no stale
+     * window between them), never on the advert copy, and a peer without it keeps receiving v2 and signed
+     * ticks. Additive per docs/WIRE_COMPAT.md: a new scheme number behind a new bit.
+     */
+    const val CAP_CRYPTO_V3 = 0x100L
+
+    /**
+     * Arbitrary-file attachments: this build understands
+     * [app.getknit.knit.mesh.crypto.MessageContent.attachmentName]/`attachmentSize` and renders a
+     * non-image, non-audio attachment as a named file rather than handing it to the image loader.
+     *
+     * A send-time input like [CAP_RATCHET] — the composer offers "File" only toward a pinned profile
+     * carrying this bit (every member's, for a group). Without it the two new fields are dropped by
+     * `ignoreUnknownKeys` and the recipient gets an attachment it cannot name or open, which is worse
+     * than not offering the send. Deliberately *not* a privacy control: those must never be gated on a
+     * peer's own unauthenticated claim (`.agents/memory/roadmap.md`, the `FileHeaderWire.mime` entry).
+     */
+    const val CAP_FILES = 0x200L
+
+    /**
+     * Link-preview cards: this build renders an attachment typed [LinkPreviewBlob.MIME] as the card its sender
+     * fetched (title, description, picture) rather than handing the container to the image loader.
+     *
+     * A send-time input like [CAP_FILES] — a card is attached to a DM or group message only when every
+     * recipient's pinned profile carries this bit, since a build without it shows the message with a
+     * spinner where the card should be, which is worse than the plain link. The Nearby room is the deliberate
+     * exception: its listeners cannot be enumerated, so a room message carries its card regardless, and a
+     * pre-card build degrades there (ADR: link previews). Not a privacy control, for [CAP_FILES]'s reason.
+     */
+    const val CAP_LINK_PREVIEW = 0x400L
+
+    /**
+     * Direct file transfer: this build answers a sealed `CTL_TRANSFER` offer (`MessageContent.xf`) with an
+     * accept/decline card and can join the one-shot Wi-Fi Direct group the sender hosts for the bytes.
+     *
+     * A send-time input like [CAP_FILES] — an offer is sent only toward a pinned profile carrying this bit,
+     * since a build without it consumes the ctl as a silent no-op and the sender would wait out the offer
+     * for nothing. Not a privacy control, for [CAP_FILES]'s reason.
+     */
+    const val CAP_DIRECT_TRANSFER = 0x800L
+
+    /**
+     * A GATT doorbell: this node serves the writable characteristic
+     * [app.getknit.knit.mesh.bluetooth.DoorbellPolicy.DOORBELL_UUID] and asks the peer on a Bluetooth link to
+     * write it after the frames it sends. iOS resumes a suspended app for a write to its own GATT server and
+     * not for data arriving on an open L2CAP channel, so the iPhone port sets this bit (knit-ios ADR
+     * 2026-09.khjj; ADR 2026-09.dqvb here).
+     *
+     * **Never in [LOCAL_CAPABILITIES]:** Android serves no GATT and is never suspended. Read from the HELLO's
+     * copy only, and only by the Bluetooth transport; it sits above the 8 bits a BLE advert carries, so no
+     * advert shows it.
+     */
+    const val CAP_DOORBELL = 0x1000L
+
+    /**
+     * Blob holders: this node answers a `blobhave` query with a `blobhas` — which of the asked blobs it holds, is
+     * already sending us, or is fetching itself (ADR 2026-10.6e5t). The asker queries only a neighbour whose link
+     * carries this bit: a build without it refuses the unsigned frame, and the asker would wait out its answer for
+     * nothing. Read from the link's own copy (the HELLO, or the Wi-Fi Aware SSI) — queries ride live links, never a
+     * pinned profile — and above the 8 bits a BLE advert carries. Every build answers; only the asking is gated
+     * (`BuildConfig.BLOB_QUERY`). A routing hint like the rest: a liar costs the asker one grace, never a blob.
+     */
+    const val CAP_BLOB_HAVE = 0x2000L
+
+    /**
+     * Live voice calls (experimental, docs/VOICE_CALLS.md): this build answers a sealed `CTL_CALL` live offer
+     * (`MessageContent.cl`) by ringing, and carries the call's media over WebRTC. A build may take walkie calls alone
+     * ([CAP_WALKIE] without this bit, ADR 2026-10.swvp), so a walkie offer never asks for it.
+     *
+     * **Never in [LOCAL_CAPABILITIES]:** only a build that wires the call media (`di/CallWiring`'s `LIVE_CALLS_WIRED`,
+     * debug today) advertises it, OR-ed into its own profile by `MeshManager`. A send-time input like [CAP_DIRECT_TRANSFER] — an
+     * offer goes only toward a pinned profile carrying this bit (C-3.1-2), since a build without it consumes the ctl
+     * as a silent no-op and the caller would ring out for nothing. Above the 8 bits a BLE advert carries.
+     */
+    const val CAP_CALL = 0x4000L
+
+    /**
+     * Walkie-talkie calls (experimental, docs/VOICE_CALLS.md §3.11, ADR 2026-10.79yb): this build answers a walkie
+     * offer (`CallPayload.MEDIA_WALKIE`) and plays a session's voice notes as they arrive. Like [CAP_CALL], never in
+     * [LOCAL_CAPABILITIES] — OR-ed in by a build that wires it (`di/CallWiring`, `BuildConfig.MESH_CALLS`) — and a
+     * send-time input only: a caller offers a walkie, or the drop to one, only toward a profile carrying it.
+     */
+    const val CAP_WALKIE = 0x8000L
+
+    /**
+     * Compact LoRa DMs (ADR 2026-10.x9fa): this phone reads a pair-sealed `0x11` unicast its board takes, and its board
+     * is one a compact DM may be addressed to. A send-time input like [CAP_RATCHET], read from the **pinned** profile
+     * only — the board acknowledges a unicast whatever the phone behind it does with it, so a sender that went on the
+     * profile's `loraNode` alone would have its packet acked by the board of a phone that throws it away.
+     *
+     * **Never in [LOCAL_CAPABILITIES]:** OR-ed into our own profile by `MeshManager` only while the LoRa plane and its DM
+     * switch are both on (`SettingsStore.loraEnabled` and `loraDmEnabled`), the same moment the profile names the board
+     * at all. Android-only for now (`docs/WIRE_COMPAT.md`); above the 8 bits a BLE advert carries.
+     */
+    const val CAP_LORA_DIRECT = 0x10000L
+
+    /**
+     * Direct Internet links (experimental, ADR 2026-10.a5yj): this build reads a `link` signal cast through a spool and
+     * can answer it with a direct UDP link. Like [CAP_CALL], never in [LOCAL_CAPABILITIES] — OR-ed in by a build that
+     * wires links (`di/DirectLinkWiring`, `BuildConfig.DIRECT_LINKS`) — and a send-time input only: an offer goes only
+     * toward a pinned profile carrying it, since an older build's cast door drops a `link` frame without an answer. It
+     * says the build takes links, not that the person switched them on: a phone with the switch off never answers.
+     * It took `0x10000` first on `exp/dht-links` and moved to `0x20000` when [CAP_LORA_DIRECT] reached `main` with that bit.
+     */
+    const val CAP_INET_LINK = 0x20000L
+
+    /**
+     * Link proof (ADR 2026-11.264w, knit-next #232): this build proves the node id its link HELLO claims. Its HELLO
+     * carries a fresh nonce as a fourth field ([hello]), and to a peer whose HELLO carries this bit too it writes a
+     * `PROOF` link record ([app.getknit.knit.mesh.link.LinkFraming.Type.PROOF]): its two raw public keys and an
+     * identity-key signature over both HELLOs ([app.getknit.knit.mesh.crypto.LinkProof]). In [LOCAL_CAPABILITIES], so
+     * it also rides every signed profile this build publishes, and that copy is the one that counts: a phone whose
+     * stored profile for an id carries the bit refuses an unproven HELLO claiming that id
+     * ([app.getknit.knit.mesh.link.LinkClaims]). The profile is signed by its author, so nobody else can strip it. The
+     * HELLO copy is authenticated only on a link that proved itself (the transcript covers both HELLOs). It reaches the
+     * Wi-Fi Aware SSI too, where it means nothing, and is above the 8 bits a BLE advert carries.
+     */
+    const val CAP_LINK_PROOF = 0x40000L
+
+    /**
+     * Blinded adverts (ADR 2026-11.xp6d, knit-next #285): this build reads a Bluetooth advert whose bytes 1–16 are a
+     * rotating tag rather than a node id (`BleAdvertPayload.FLAG_BLINDED`), dials such a tag without expecting an id
+     * back ([app.getknit.knit.mesh.link.LinkHandshake.dialTag]), and writes and reads the HELLO's advertised-form fields
+     * ([hello]'s `told` and `addressed`). It says the build *reads* tags, not that it writes them. Unauthenticated, like
+     * every HELLO bit: nothing private is decided on it; a dialer without it, while this phone blinds, is the older
+     * build's lonely dial to a tag, and is refused. Not in [LOCAL_CAPABILITIES] until the Bluetooth plane reads tags.
+     */
+    const val CAP_BLIND_ADVERT = 0x80000L
+
+    /** This build's advertised capability bitfield. */
+    const val LOCAL_CAPABILITIES: Long =
+        CAP_E2E or CAP_GROUPS or CAP_REACTIONS or CAP_STORE_FORWARD or CAP_RATCHET or CAP_FAST_COMPACT or
+            CAP_INLINE_ACK or CAP_FRAME_TRANSCODE or CAP_CRYPTO_V3 or CAP_FILES or CAP_LINK_PREVIEW or
+            CAP_DIRECT_TRANSFER or CAP_BLOB_HAVE or CAP_LINK_PROOF
+
+    /** The bytes of a link HELLO's nonce ([hello]): 16, written as 32 lowercase hex digits after an `n`. */
+    const val HELLO_NONCE_BYTES = 16
+
+    /**
+     * The bytes of an advertised form in a HELLO's `t` / `a` field ([hello]): Bluetooth advert bytes 1–16 (a node id, or
+     * a blinded tag), written as 32 lowercase hex digits after the letter.
+     */
+    const val HELLO_FORM_BYTES = 16
+
+    private const val SEP = '|'
+    private const val NONCE_PREFIX = 'n'
+    private const val NONCE_FIELD = 3
+    private const val TOLD_PREFIX = 't'
+    private const val ADDRESSED_PREFIX = 'a'
+
+    /** The endpoint-info string a peer advertises: its [nodeId] plus this build's version + capabilities. */
+    fun advertise(nodeId: String): String = "$nodeId$SEP$VERSION$SEP${LOCAL_CAPABILITIES.toString(RADIX)}"
+
+    /**
+     * A link HELLO's payload: the [advertise] string plus a fourth field `n<nonce>`, [nonce] being [HELLO_NONCE_BYTES]
+     * fresh random bytes in lowercase hex. HELLO-only: [advertise] is also the Wi-Fi Aware SSI, whose `|d<digest>`
+     * suffix `NanCueCodec.parseSsiDigest` finds by its last `|d`, so the nonce never goes there. Every shipped build
+     * reads fields 0-2 alone ([parse]), so the field costs an older peer nothing. Written only while
+     * [LOCAL_CAPABILITIES] carries [CAP_LINK_PROOF]: the field is present exactly when the caps carry the bit.
+     *
+     * Blinded adverts (ADR 2026-11.xp6d) add up to two fields after the nonce, each [HELLO_FORM_BYTES] in lowercase hex:
+     * `t<form>` ([told]), the advert bytes 1–16 the sender airs now, and `a<form>` ([addressed]), on a dialer's HELLO, the
+     * form it dialed. `a`, not `d`: the SSI's `|d<digest>` must never look like one. Every shipped parser reads at most
+     * fields 0-3, so the two cost an older peer nothing, and the link proof signs both HELLOs as they crossed the link, so
+     * on a proven link they are the proven sender's words (a claim about a tag, never proof it owns one).
+     */
+    fun hello(
+        nodeId: String,
+        nonce: ByteArray,
+        told: ByteArray? = null,
+        addressed: ByteArray? = null,
+    ): String {
+        require(nonce.size == HELLO_NONCE_BYTES) { "a HELLO nonce is $HELLO_NONCE_BYTES bytes" }
+        require(told == null || told.size == HELLO_FORM_BYTES) { "a told form is $HELLO_FORM_BYTES bytes" }
+        require(addressed == null || addressed.size == HELLO_FORM_BYTES) { "an addressed form is $HELLO_FORM_BYTES bytes" }
+        val base = "${advertise(nodeId)}$SEP$NONCE_PREFIX${nonce.toHex()}"
+        val t = told?.let { "$SEP$TOLD_PREFIX${it.toHex()}" }.orEmpty()
+        val a = addressed?.let { "$SEP$ADDRESSED_PREFIX${it.toHex()}" }.orEmpty()
+        return base + t + a
+    }
+
+    /**
+     * A neighbor's advertised identity parsed from its endpoint name. [nonceHex] is a link HELLO's nonce, its 32 hex
+     * digits, only when field 3 has [hello]'s exact form (null otherwise, and always for an advert). [toldHex] and
+     * [addressedHex] are a HELLO's `t` / `a` fields ([hello]): read only behind a valid nonce, in any order after it, in
+     * their exact shape, unknown fields skipped; a letter that appears twice in that shape is absent. They are the
+     * sender's claim only on a link that proved itself (`proven = true`); read before a proof (a responder's
+     * [app.getknit.knit.mesh.link.LinkHandshake.receiveHello], an unproven `Linked`) they are a hint at most (ADR
+     * 2026-11.xp6d).
+     */
+    data class PeerWire(
+        val nodeId: String,
+        val protoVersion: Int,
+        val capabilities: Long,
+        val nonceHex: String? = null,
+        val toldHex: String? = null,
+        val addressedHex: String? = null,
+    ) {
+        /** Its caps carry [CAP_LINK_PROOF]: the HELLO asks for, and promises, a proof. */
+        val offersProof: Boolean get() = capabilities and CAP_LINK_PROOF != 0L
+
+        /** Its caps carry [CAP_BLIND_ADVERT]: the sender reads tags (and so is no older build's lonely dial). */
+        val readsTags: Boolean get() = capabilities and CAP_BLIND_ADVERT != 0L
+
+        /** The advertised form the sender says it airs, as the 26-char string of its 16 bytes, or null. */
+        val told: String? get() = toldHex?.let(::formOf)
+
+        /** The advertised form a dialer says it dialed, as the 26-char string of its 16 bytes, or null. */
+        val addressed: String? get() = addressedHex?.let(::formOf)
+    }
+
+    /**
+     * Parses an endpoint name. The first segment is always the nodeId (robust to any future suffix); a
+     * missing version/capabilities (a bare legacy nodeId) yields version 0 / no capabilities. Never
+     * throws — an unparseable version or capabilities segment degrades to "unknown".
+     *
+     * Null when the nodeId is not canonical ([NodeId.toBytesOrNull], #199): the id arrives as text and keys
+     * the `peers` row, and SQLite drops a leading U+FEFF from a UTF-16 bind, so `"\uFEFF" + X` would pass every
+     * in-memory duplicate-link check and still read and write X's row (the frame-id twin, ADR 2026-10.9qr4).
+     * Every Android and iOS build advertises a canonical id, so this refuses no real peer.
+     */
+    fun parse(endpointName: String): PeerWire? {
+        val parts = endpointName.split(SEP)
+        if (NodeId.toBytesOrNull(parts[0]) == null) return null
+        val nonceHex = parts.getOrNull(NONCE_FIELD)?.let { hexField(it, NONCE_PREFIX, HELLO_NONCE_BYTES) }
+        // The form fields sit behind a valid nonce only, so an SSI (`…|d<digest>`) or a future field never reads as one.
+        val forms = if (nonceHex == null) emptyList() else parts.drop(NONCE_FIELD + 1)
+        return PeerWire(
+            nodeId = parts[0],
+            protoVersion = parts.getOrNull(1)?.toIntOrNull() ?: 0,
+            capabilities = parts.getOrNull(2)?.toLongOrNull(RADIX) ?: 0L,
+            nonceHex = nonceHex,
+            toldHex = onlyForm(forms, TOLD_PREFIX),
+            addressedHex = onlyForm(forms, ADDRESSED_PREFIX),
+        )
+    }
+
+    // The one exact-shape field with [prefix] among [forms], or null when there is none or more than one: a signer that
+    // writes `|tX|tY` must not be read as X here and as Y by a port that takes the last (one proven claim, two readings).
+    private fun onlyForm(
+        forms: List<String>,
+        prefix: Char,
+    ): String? = forms.mapNotNull { hexField(it, prefix, HELLO_FORM_BYTES) }.singleOrNull()
+
+    // A field is `prefix` + exactly 2 * bytes of [0-9a-f], or nothing at all: never an error.
+    private fun hexField(
+        field: String,
+        prefix: Char,
+        bytes: Int,
+    ): String? {
+        if (field.length != 1 + 2 * bytes || field[0] != prefix) return null
+        val hex = field.substring(1)
+        return hex.takeIf { it.all { c -> c in '0'..'9' || c in 'a'..'f' } }
+    }
+
+    // 32 lowercase hex digits (already checked by [hexField]) as the 26-char form of their 16 bytes.
+    private fun formOf(hex: String): String =
+        NodeId.fromBytes(ByteArray(hex.length / 2) { hex.substring(2 * it, 2 * it + 2).toInt(RADIX).toByte() })
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(Locale.ROOT, it) }
+
+    private const val RADIX = 16
+}

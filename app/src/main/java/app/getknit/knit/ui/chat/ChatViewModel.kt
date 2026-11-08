@@ -1,0 +1,3927 @@
+package app.getknit.knit.ui.chat
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import androidx.core.net.toUri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import app.getknit.knit.R
+import app.getknit.knit.TextLimits
+import app.getknit.knit.call.CallKind
+import app.getknit.knit.call.CallManager
+import app.getknit.knit.call.CallRefusal
+import app.getknit.knit.call.NoteStt
+import app.getknit.knit.call.SttModelState
+import app.getknit.knit.call.VoiceNoteSpeech
+import app.getknit.knit.clampToUtf16
+import app.getknit.knit.data.AttachmentIdentities
+import app.getknit.knit.data.AttachmentStore
+import app.getknit.knit.data.BlobRepository
+import app.getknit.knit.data.FileTypes
+import app.getknit.knit.data.GallerySaver
+import app.getknit.knit.data.GroupRepository
+import app.getknit.knit.data.LinkCardStore
+import app.getknit.knit.data.LocalMessageDelete
+import app.getknit.knit.data.MessageReceiptRepository
+import app.getknit.knit.data.MessageRepository
+import app.getknit.knit.data.PeerRepository
+import app.getknit.knit.data.PinOutcome
+import app.getknit.knit.data.PinRepository
+import app.getknit.knit.data.ReactionRepository
+import app.getknit.knit.data.VoiceAudio
+import app.getknit.knit.data.commons.CommonsEntity
+import app.getknit.knit.data.commons.CommonsRepository
+import app.getknit.knit.data.draft.Draft
+import app.getknit.knit.data.draft.DraftRepository
+import app.getknit.knit.data.emoji.RecentReactions
+import app.getknit.knit.data.group.GroupEntity
+import app.getknit.knit.data.group.GroupMembersStore
+import app.getknit.knit.data.group.toGroupInfo
+import app.getknit.knit.data.message.CallRecord
+import app.getknit.knit.data.message.ConversationKind
+import app.getknit.knit.data.message.Conversations
+import app.getknit.knit.data.message.DeliveryPlane
+import app.getknit.knit.data.message.GroupFace
+import app.getknit.knit.data.message.MentionStore
+import app.getknit.knit.data.message.MessageEntity
+import app.getknit.knit.data.message.StyleStore
+import app.getknit.knit.data.message.TransferRecord
+import app.getknit.knit.data.message.groupFaces
+import app.getknit.knit.data.message.groupTitle
+import app.getknit.knit.data.message.hiddenByFilter
+import app.getknit.knit.data.message.meshRoomChannel
+import app.getknit.knit.data.message.newestOriginChannel
+import app.getknit.knit.data.message.receivedPlane
+import app.getknit.knit.data.reaction.ReactionEntity
+import app.getknit.knit.data.relay.AttachmentRelay
+import app.getknit.knit.data.relay.AttachmentWait
+import app.getknit.knit.data.relay.FreeUploadOffer
+import app.getknit.knit.data.relay.FreeUploads
+import app.getknit.knit.data.relay.RelayFacts
+import app.getknit.knit.data.relay.RelayPlane
+import app.getknit.knit.data.relay.RelayReach
+import app.getknit.knit.data.relay.attachmentReach
+import app.getknit.knit.data.relay.attachmentWait
+import app.getknit.knit.data.relay.lacksForwardSecrecy
+import app.getknit.knit.data.relay.noticeFor
+import app.getknit.knit.data.relay.photoFitBytes
+import app.getknit.knit.data.relay.planeFor
+import app.getknit.knit.data.relay.reachFor
+import app.getknit.knit.data.settings.SettingsStore
+import app.getknit.knit.data.video.VideoEncodePolicy
+import app.getknit.knit.di.TRANSLATE_WIRED
+import app.getknit.knit.identity.Alias
+import app.getknit.knit.identity.Identity
+import app.getknit.knit.identity.PeerLabel
+import app.getknit.knit.identity.displayNameFor
+import app.getknit.knit.linkpreview.LinkPreviewPolicy
+import app.getknit.knit.linkpreview.LinkPreviewService
+import app.getknit.knit.location.GeoPoint
+import app.getknit.knit.location.GeoUri
+import app.getknit.knit.location.LocationFix
+import app.getknit.knit.location.LocationFixPolicy
+import app.getknit.knit.location.LocationPrecision
+import app.getknit.knit.location.LocationSource
+import app.getknit.knit.mesh.ArrivingFile
+import app.getknit.knit.mesh.BluetoothFetchGate
+import app.getknit.knit.mesh.LoraRadioReached
+import app.getknit.knit.mesh.MeshController
+import app.getknit.knit.mesh.PublicPostOutcome
+import app.getknit.knit.mesh.PublicPostRefusal
+import app.getknit.knit.mesh.TransportHealth
+import app.getknit.knit.mesh.TransportKind
+import app.getknit.knit.mesh.crypto.AttachmentCrypto
+import app.getknit.knit.mesh.crypto.b64d
+import app.getknit.knit.mesh.lora.LoraFacts
+import app.getknit.knit.mesh.lora.LoraPlane
+import app.getknit.knit.mesh.lora.PublicPostPolicy
+import app.getknit.knit.mesh.meshNodeLabel
+import app.getknit.knit.mesh.protocol.DeclaredLangs
+import app.getknit.knit.mesh.protocol.LinkCard
+import app.getknit.knit.mesh.protocol.LinkPreviewBlob
+import app.getknit.knit.mesh.protocol.Mention
+import app.getknit.knit.mesh.protocol.Protocol
+import app.getknit.knit.mesh.protocol.ReplyRef
+import app.getknit.knit.mesh.protocol.StyleSpan
+import app.getknit.knit.mesh.protocol.StyleSpans
+import app.getknit.knit.moderation.ImageScreeningService
+import app.getknit.knit.notifications.Notifier
+import app.getknit.knit.transfer.OfferOutcome
+import app.getknit.knit.transfer.TransferManager
+import app.getknit.knit.transfer.TransferRefusal
+import app.getknit.knit.transfer.TransferState
+import app.getknit.knit.translate.ChatTranslation
+import app.getknit.knit.translate.ComposePolicy
+import app.getknit.knit.translate.LanguageChoices
+import app.getknit.knit.translate.LanguagePick
+import app.getknit.knit.translate.MessageTranslation
+import app.getknit.knit.translate.Resolution
+import app.getknit.knit.translate.StoredTranslation
+import app.getknit.knit.translate.TranslateDirection
+import app.getknit.knit.translate.TranslateLang
+import app.getknit.knit.translate.TranslateOutcome
+import app.getknit.knit.translate.TranslateTarget
+import app.getknit.knit.ui.share.OutsideUris
+import app.getknit.knit.ui.share.OwnFile
+import app.getknit.knit.ui.translate.LanguageNames
+import app.getknit.knit.ui.voice.VoicePlayer
+import app.getknit.knit.ui.voice.VoiceRecorder
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.distinctUntilChangedBy
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.Locale
+
+/** How far a received quote could be checked against the original it names (ADR 2026-10.gpa3). */
+enum class QuoteState {
+    /** Rebuilt from the original this phone held, or one of our own replies. */
+    Verified,
+
+    /** The original is not on this phone, so the quote is the sender's word for it. */
+    Unverified,
+
+    /** It names a message that is not what the quote claims — another author, another thread — or one of ours we do not hold. */
+    Unavailable,
+}
+
+/**
+ * A quote as the bubble draws it. [author] is the reader's own label for the quoted author's id — "You", a
+ * contact's name, an alias — never the name the sender wrote, and blank when [state] is [QuoteState.Unavailable],
+ * which shows nothing of the claim.
+ */
+data class QuoteView(
+    val messageId: String,
+    val author: String,
+    val snippet: String,
+    val hasAttachment: Boolean,
+    val state: QuoteState,
+)
+
+/**
+ * The name the thread puts on a message's author, one rule for the bubbles and the pinned bar. A heard post's author is
+ * the Meshtastic speaker ([origin]), never this phone, whose id sits in the sender column by convention: the contact
+ * the speaker resolved to, else the name the radio heard, else the board's `!hex` label. Otherwise this phone's own
+ * message reads [selfName] and anyone else's reads their directory label ([labelOf]).
+ *
+ * [selfName] is the caller's: the bubbles use the person's own display name where they set one, and the bar says
+ * "You", as a chat list or a quote does.
+ */
+internal fun senderName(
+    origin: MeshOrigin?,
+    senderId: String,
+    me: String?,
+    selfName: String,
+    labelOf: (nodeId: String) -> String,
+): String =
+    when {
+        origin != null -> origin.peerId?.let(labelOf) ?: origin.name ?: origin.nodeLabel
+        senderId == me -> selfName
+        else -> labelOf(senderId)
+    }
+
+/**
+ * What the bubble shows of [m]'s quote, or null when [m] is not a reply. Our own replies ([mine]) are trusted — we
+ * quoted a row we held. Somebody else's is [QuoteState.Verified] only once the original was held and matched
+ * ([MessageEntity.replyCheck]); a quote of one of **our** messages that was never matched is
+ * [QuoteState.Unavailable] rather than unverified, because this phone holds everything it sent, so an absent
+ * original was deleted, swept or never ours. [labelOf] names a node id the way the thread names its senders.
+ */
+internal fun quoteViewFor(
+    m: MessageEntity,
+    mine: Boolean,
+    me: String?,
+    selfLabel: String,
+    labelOf: (String) -> String,
+): QuoteView? {
+    val id = m.replyToId ?: return null
+    val authorId = m.replyToAuthorId.orEmpty()
+    val state =
+        when {
+            mine -> QuoteState.Verified
+            m.replyCheck == MessageEntity.REPLY_VERIFIED -> QuoteState.Verified
+            m.replyCheck == MessageEntity.REPLY_MISMATCH -> QuoteState.Unavailable
+            authorId == me || authorId.isBlank() -> QuoteState.Unavailable
+            else -> QuoteState.Unverified
+        }
+    if (state == QuoteState.Unavailable) return QuoteView(id, author = "", snippet = "", hasAttachment = false, state = state)
+    return QuoteView(
+        messageId = id,
+        author = if (authorId == me) selfLabel else labelOf(authorId),
+        snippet = m.replyToSnippet.orEmpty(),
+        hasAttachment = m.replyToHasAttachment,
+        state = state,
+    )
+}
+
+data class ChatRow(
+    val id: String,
+    val body: String,
+    val mine: Boolean,
+    val senderName: String,
+    val senderNodeId: String,
+    // The ` (Alias)` suffix already inside [senderName] when another known peer shares the sender's name
+    // (ADR 058), which the bubble draws muted — and the plain name for the one sink that must stay plain:
+    // the author snapshot a reply puts on the wire ([app.getknit.knit.mesh.protocol.ReplyRef.author]).
+    val senderDiscriminator: String? = null,
+    val senderPlainName: String = senderName,
+    // True when this row's author is a Knit peer whose pinned key the local user confirmed out of band
+    // ([app.getknit.knit.data.peer.PeerEntity.verified]), in a thread where the name above a bubble is the
+    // only thing that says who wrote it — a group. A DM says it once in the header instead, and our own
+    // rows never say it at all. Never set on a heard Meshtastic post: that shield is [MeshOrigin.verified]'s,
+    // and it vouches for a radio rather than for a person.
+    val senderVerified: Boolean = false,
+    // A non-[MessageEntity.KIND_NORMAL] row is a status notice (e.g. [MessageEntity.KIND_MEMBER_LEFT]),
+    // rendered as a centered line using [senderName] instead of a chat bubble.
+    val kind: Int = MessageEntity.KIND_NORMAL,
+    val avatarHash: String?,
+    val sentAt: Long,
+    val received: Boolean,
+    // The plane the receipt that flipped [received] arrived on, or a contact's direct link when one carried the file
+    // ([shownPlane]); [DeliveryPlane.Internet] paints a globe beside the tick, a link two arrows. See [MessageEntity].
+    val deliveredVia: DeliveryPlane = DeliveryPlane.Unknown,
+    // How many of the group's other members have acked this message, out of how many there are. Both 0
+    // outside a group send of ours — and [deliveredCount] is 0 for a message acked before this device
+    // recorded ackers, which is what makes the tick fall back to a bare "Delivered" (see [deliveryLabel]).
+    val deliveredCount: Int = 0,
+    val recipientTotal: Int = 0,
+    // Our DM's compact LoRa copy was acked by their own board and no receipt is back yet (ADR 040's 2026-10-31
+    // amendment): the tick's middle state. Always false once [received], and outside a DM of ours.
+    val radioReached: Boolean = false,
+    // True when content filtering hides this message — the on-device text moderator flagged its body, or the
+    // words it quotes (`MessageEntity.hiddenByFilter`); the bubble collapses it behind a tap-to-reveal instead
+    // of showing the text outright.
+    val moderationFlagged: Boolean = false,
+    val attachmentHash: String? = null,
+    val attachmentMime: String? = null,
+    // More than one frame (a GIF): a quote of this message says "GIF" rather than "Photo".
+    val attachmentAnimated: Boolean = false,
+    // Base64 key for an end-to-end-encrypted attachment (null for plaintext/broadcast attachments);
+    // passed to the image loader to decrypt the ciphertext blob before decoding.
+    val attachmentKey: String? = null,
+    // True once the attachment blob is present locally; false while it's still being pulled (the bubble
+    // shows a loading placeholder). Only meaningful when [attachmentHash] is non-null.
+    val attachmentReady: Boolean = false,
+    // True when on-device screening flagged the attachment as explicit; the bubble blurs it behind a
+    // tap-to-view. Only meaningful when [attachmentHash] is non-null.
+    val attachmentFlagged: Boolean = false,
+    // An arbitrary-file attachment's name and the byte count its sender declared (ADR 2026-09.qq2r). Both
+    // null for an image or a voice note; a non-null [attachmentName] is what selects the file bubble.
+    // [attachmentSize] is what the bubble shows until the bytes land — after that [attachmentBytes] is.
+    val attachmentName: String? = null,
+    val attachmentSize: Long? = null,
+    // The stored blob's own length once it is here, which supersedes the sender's declared size.
+    val attachmentBytes: Int? = null,
+    // A received attachment over the user's "Ask before large Bluetooth downloads" limit, not yet tapped and not
+    // held: its fetch rides Wi-Fi Aware only, and the bubble offers "Tap to download" while no bytes are arriving
+    // (ADR 2026-10.js2p). [attachmentSize] is then the size the card shows.
+    val attachmentAwaitsTap: Boolean = false,
+    // Whether this attachment can cross the Internet-relay plane. Anything but [AttachmentRelay.Silent]
+    // or [AttachmentRelay.Relayable] marks the bubble "nearby only" — a statement about *reach*, never
+    // about delivery, which the ✓/✓✓ tick keeps to itself. Set only for our own sends; see the mapping
+    // in [ChatViewModel].
+    val attachmentRelay: AttachmentRelay = AttachmentRelay.Silent,
+    // While the bytes are missing, whether the Internet plane can still bring them — the placeholder's
+    // second line (work item 50). [AttachmentWait.Nearby] once they are here or when there is nothing to add.
+    val attachmentWait: AttachmentWait = AttachmentWait.Nearby,
+    // The decoded link-preview card when this attachment is one ([attachmentMime] is the card MIME), its blob
+    // is here, it decoded, and — the receiver's guard against a card attached to a link it does not describe —
+    // its link is one the body actually contains. Null until then: the bubble draws nothing for a card that
+    // has not arrived, never a spinner, since the body's own link is already tappable.
+    val linkCard: LinkCard? = null,
+    // A short video's duration and upright size (the sender's until the bytes land, then the bytes' own) and its
+    // poster, base64 as the row stores it (a String keeps this data class's value equality), with the poster's own
+    // screening verdict: a flagged poster is drawn blurred like a flagged picture (ADR 2026-10.hmfe). All null for
+    // anything but a video.
+    val videoDurationMs: Long? = null,
+    val videoWidth: Int? = null,
+    val videoHeight: Int? = null,
+    val videoPoster: String? = null,
+    val posterFlagged: Boolean = false,
+    // The position this message carries as a `geo:` token in its body ([app.getknit.knit.location.GeoUri]),
+    // parsed once here so the bubble draws a card in the token's place and the token itself stays out of
+    // the text it shows. Null for every body without one — including a token that fails the grammar, which
+    // is then just text.
+    val location: GeoPoint? = null,
+    // A voice note's playing time and waveform bars, both derived locally from the audio (never carried on
+    // the wire — see [app.getknit.knit.data.VoiceAudio]). Null until the blob has arrived and been
+    // described, which is why the bubble can render a length-less placeholder in the meantime.
+    //
+    // The bars stay in their stored Base64 form here rather than a decoded FloatArray: this is a data class,
+    // and an array field would give it reference-identity equality, so every re-emission of the message list
+    // would recompose every voice bubble on screen. The bubble decodes once, under `remember`.
+    val voiceDurationMs: Int? = null,
+    val voicePeaks: String? = null,
+    // A voice note's words, written out on this phone on the person's tap (ADR 2026-10.am8d); null until then, empty
+    // when the model heard no speech. Never on the wire.
+    val voiceTranscript: String? = null,
+    // The body translated on this phone at the reader's tap and kept on the row (ADR 2026-10.t2h6); null until then.
+    val translation: StoredTranslation? = null,
+    // The language its author declared the body is in, and the one they read (registry codes off the frame); null when
+    // nothing was declared. Labels for the translation's priors and the composer's hint, never trusted beyond that.
+    val bodyLang: String? = null,
+    val authorReads: String? = null,
+    val mentions: List<Mention> = emptyList(),
+    // The sender's formatting over [body] (ADR 2026-10.p95v), canonical as the receiver stored it; the bubble draws
+    // it ([bubbleStyles]), and every other surface reads the plain body.
+    val styles: List<StyleSpan> = emptyList(),
+    val reactions: List<ReactionSummary> = emptyList(),
+    // The message this row quotes (Signal-style reply), or null when it isn't a reply: what the reader may be
+    // shown of it, and how far it could be checked against the original (ADR 2026-10.gpa3). See [quoteViewFor].
+    val quote: QuoteView? = null,
+    // Set only on a post heard on the paired radio's channel, and the flag the bubble reads to render one
+    // differently: a muted name, the provenance line, and an avatar that never opens a profile directly —
+    // inert for a stranger, and for a resolved contact ([MeshOrigin.peerId]) a tap that opens the caveat
+    // about the match first. The one exception is a match the radio's own signature verified
+    // ([MeshOrigin.verified]), which is drawn like a Knit author's. Null on every ordinary row, including
+    // our own.
+    val origin: MeshOrigin? = null,
+    // A direct-transfer record ([MessageEntity.KIND_FILE_TRANSFER]) as its card draws it — the row's facts
+    // overlaid with live progress. Null on every other row; a row carrying one is a card, never a bubble.
+    val transfer: TransferView? = null,
+    // A call's record ([MessageEntity.KIND_CALL], §3.12), decoded. Null on every other row; a row carrying one is a
+    // call line, never a bubble.
+    val call: CallRecord? = null,
+)
+
+/**
+ * Who said a post on the radio channel, and how it reached this board — the render-time shape of
+ * [MessageEntity]'s `origin*` columns.
+ *
+ * Everything here is **unauthenticated unless [signed] says otherwise**. A Meshtastic node number and name
+ * are self-asserted on an open channel and are trivially spoofable, so [name] is a claim rather than an
+ * identity and the UI must never let it look like a Knit peer — and that includes [peerId]: a contact
+ * resolved by node number is a match against a self-asserted profile field, so the bubble wears their name
+ * and face but keeps the unverified styling, and their avatar reaches that profile only through the caveat.
+ * [MeshSignature.CONTACT] is the one state Knit vouches for: the post carried the radio's XEdDSA signature
+ * (Meshtastic 2.8) and it verified under the key that contact's own signed profile names, so the bubble
+ * takes a Knit author's styling and a shield. Even then it is the *radio* that is proven, not the hands.
+ */
+data class MeshOrigin(
+    /** The speaker's `!hex` id — the only stable handle a heard author has. */
+    val nodeLabel: String,
+    /** `User.long_name` if the board's NodeDB knew one, else null and the id stands alone. */
+    val name: String?,
+    /** The contact whose profile claimed the speaker's board when the post was heard, or null for a stranger. */
+    val peerId: String?,
+    val hops: Int?,
+    /** Signal-to-noise at this board, in tenths of a dB. */
+    val snrDeci: Int?,
+    /** The post entered the mesh over an MQTT uplink, so it may have come from anywhere. */
+    val viaMqtt: Boolean,
+    /** What the post's signature proved at ingest; frozen on the row like [peerId]. */
+    val signed: MeshSignature = MeshSignature.NONE,
+) {
+    /** The match is a verified one: the words came from the radio [peerId]'s own profile names. */
+    val verified: Boolean get() = signed == MeshSignature.CONTACT
+}
+
+/**
+ * What a heard post's XEdDSA signature proved — the render-time mirror of `MessageEntity.originSigned`,
+ * decided once at ingest and frozen on the row. Only [CONTACT] changes how a post is drawn.
+ */
+enum class MeshSignature {
+    /** No usable signature: unsigned (pre-2.8 firmware, or a post past the signature cliff), or nothing to check it against. */
+    NONE,
+
+    /** Our own board verified it against the key its NodeDB holds for the number: the radio that has been using it sent it. */
+    BOARD,
+
+    /** Verified on this phone under the key the matched contact's own signed profile advertises. */
+    CONTACT,
+
+    /** Signed, but not under the key the contact's profile names — some other radio is on their number. Drawn as a stranger. */
+    MISMATCH,
+    ;
+
+    companion object {
+        /** The row's `originSigned` value; anything a newer build might store reads as [NONE], never as trust. */
+        fun fromRow(value: Int): MeshSignature =
+            when (value) {
+                MessageEntity.ORIGIN_SIGNED_BY_BOARD -> BOARD
+                MessageEntity.ORIGIN_SIGNED_BY_CONTACT -> CONTACT
+                MessageEntity.ORIGIN_SIGNATURE_MISMATCH -> MISMATCH
+                else -> NONE
+            }
+    }
+}
+
+/**
+ * One emoji's tally on a message: the [emoji], how many people reacted with it ([count]), and whether
+ * the local user is one of them ([mine], to highlight the chip). Distinct emoji become distinct chips;
+ * the UI shows the count only when it exceeds 1.
+ */
+data class ReactionSummary(
+    val emoji: String,
+    val count: Int,
+    val mine: Boolean,
+)
+
+/**
+ * A person who can be "@"-mentioned: a thread sender or group member, resolved to a name. [displayName] is
+ * the label the picker inserts after the "@" — `Name (Alias)` when another known peer shares the name
+ * (ADR 058), in which case [discriminator] is that suffix; [alias] is always shown beside the name in the
+ * picker so the right person can be chosen, and matches the typed query too.
+ */
+data class MentionCandidate(
+    val nodeId: String,
+    val displayName: String,
+    val avatarHash: String?,
+    val alias: String = Alias.aliasFor(nodeId),
+    val discriminator: String? = null,
+)
+
+/** A peer currently shown as "typing" in this thread, resolved to a display [name] + [avatarHash] for the
+ *  animated indicator row. */
+data class TypingPeer(
+    val nodeId: String,
+    val name: String,
+    val avatarHash: String?,
+)
+
+/**
+ * A direct-transfer disclosure waiting to be read, and the tap it stands in front of: [transferId] is the
+ * offer to accept once it is read, or null when the user was on their way to the file picker. Held rather
+ * than re-derived because the sheet outlives the tap that raised it.
+ */
+data class TransferConsent(
+    val incoming: Boolean,
+    val transferId: String? = null,
+    /** The offer being answered is a bundle of translation models (ADR 2026-11.ejn8), which is installed, not saved. */
+    val models: Boolean = false,
+)
+
+/** One translation model this phone could send (ADR 2026-11.ejn8): a direction, its wire pin and its size. */
+data class ModelChoice(
+    val pin: Long,
+    val from: TranslateLang,
+    val to: TranslateLang,
+    val bytes: Long,
+)
+
+/**
+ * The direct-send sheet after the overflow item, where this phone holds translation models the peer can take (ADR
+ * 2026-11.ejn8): first the choice between a file and models, then the model list.
+ */
+sealed interface DirectSendSheet {
+    val models: List<ModelChoice>
+
+    data class Choose(
+        override val models: List<ModelChoice>,
+    ) : DirectSendSheet
+
+    data class PickModels(
+        override val models: List<ModelChoice>,
+    ) : DirectSendSheet
+}
+
+/**
+ * One pinned message as the bar under the chat's title draws it (#42): who wrote it, named as the thread names them
+ * ([senderName]), and its one-line [preview] by the chat list's rule ([messagePreview]), so a video reads "Video", a
+ * photo "Photo" and words the content filter hides "Message hidden". Tapping it jumps to [messageId] through the
+ * quote-jump path.
+ */
+data class PinnedView(
+    val messageId: String,
+    val author: String,
+    val preview: String,
+)
+
+data class ChatUiState(
+    val rows: List<ChatRow> = emptyList(),
+    val neighborCount: Int = 0,
+    // Radio health, so the connection header can distinguish "nobody nearby" from radios off/seized.
+    val transportHealth: TransportHealth = TransportHealth.Healthy,
+    val myNodeId: String = "",
+    val mentionCandidates: List<MentionCandidate> = emptyList(),
+    // What the picker's `@everyone` row mentions: the group's roster minus us and the blocked (see
+    // [everyoneMentions]). Null in every thread but a group, and in a group with nobody else to mention.
+    val everyoneMentions: List<Mention>? = null,
+    // Conversation header: the room ([isRoom] true) or a 1:1 DM with [title]/[avatarHash] of the peer.
+    val isRoom: Boolean = true,
+    val title: String = "",
+    // A group's title from its members alone, what a rename notice shows for a name that cleans to display-blank.
+    val memberTitle: String = "",
+    // The ` (Alias)` suffix already inside a DM's [title] when another known peer shares the name (ADR 058).
+    val titleDiscriminator: String? = null,
+    val avatarHash: String? = null,
+    // True when this DM's peer is blocked, so the header offers "Unblock" instead of "Block".
+    val isBlocked: Boolean = false,
+    // True when this DM's peer has been key-verified (safety number / QR), to show a verified badge.
+    val verified: Boolean = false,
+    // True when this thread is a group chat; [memberCount] sizes the header subtitle. The header then
+    // offers "Rename group" / "Leave group" instead of Block/Unblock.
+    val isGroup: Boolean = false,
+    val memberCount: Int = 0,
+    // The other members a photo-less group's header avatar draws as a cluster (`groupFaces`, ADR
+    // 2026-09.zapp); empty for a DM or a group with fewer than two others.
+    val groupFaces: List<GroupFace> = emptyList(),
+    // Peers currently typing in this thread, shown as an animated indicator above the input. Ephemeral
+    // (TTL'd in the mesh layer) and best-effort; empty most of the time.
+    val typingPeers: List<TypingPeer> = emptyList(),
+    // Whether the Internet-relay plane covers this thread. Only [RelayReach.Room], [RelayReach.Pending]
+    // and [RelayReach.NoForwardSecrecy] render anything — coverage is the happy path, and an outage is transient and
+    // stays quiet. A room whose notice the user has dismissed reads [RelayReach.Silent] here, so this is
+    // what to *show*, not what is true of the plane. See [noticeFor].
+    val relayReach: RelayReach = RelayReach.Silent,
+    // The Internet plane's whole-device state, for the connection header. Coarser than [relayReach] and
+    // about a different thing: whether the plane is up at all, not whether it covers this thread.
+    val relayPlane: RelayPlane = RelayPlane.Off,
+    // Whether the dialog behind a file's "Not on relays" marker says a direct link can carry it too (ADR 2026-10.a5yj):
+    // a DM whose peer's build takes links ([Protocol.CAP_INET_LINK]) while this phone's switch is on. The peer's own
+    // switch can't be seen from here, so the dialog says the link needs it on too. A group's file never takes a link to
+    // every member, so a group never says it.
+    val relayDirectLinkNote: Boolean = false,
+    // The LoRa plane's whole-device state, for the same header (the board glyph beside the cloud).
+    val loraPlane: LoraPlane = LoraPlane.Off,
+    // Whether the board alone can hear this DM's peer — the pinned notice under the header. See [loraReachFor].
+    val loraReach: LoraReach = LoraReach.Silent,
+    // Whether (and in which form) a draft here rides LoRa — sizes the composer's length hint. See [loraCarryFor].
+    val loraCarry: LoraCarry = LoraCarry.None,
+    // Whether the Meshtastic room's composer may post from this device, and if not why ([publicPostGateFor]).
+    // [PublicPostGate.Open] everywhere else, and as the seed — a send that beats the first emission is judged
+    // by the board's own outcome rather than by a stale gate.
+    val publicPostGate: PublicPostGate = PublicPostGate.Open,
+    // Whether the composer shows its attach-a-file button (ADR 2026-09.qq2r) — everywhere except the
+    // Nearby room, which
+    // takes the refusal voice notes take: nothing on the device can screen a file, and the room floods
+    // unencrypted to everyone in range.
+    //
+    // Deliberately NOT also gated on the recipient advertising [Protocol.CAP_FILES]. That bit only arrives
+    // in a profile frame from a peer already running a build that has it, so hiding the item until then
+    // made the whole feature invisible with no way to tell why — including on a fresh pair of devices where
+    // one side has updated. The capability is enforced where it can explain itself instead, in
+    // [ChatViewModel.attachFile].
+    val canSendFile: Boolean = false,
+    // Whether the top bar offers a live voice call (experimental, docs/VOICE_CALLS.md): a 1:1 thread in a build that
+    // takes them, toward a peer whose pinned profile carries CAP_CALL (C-3.11-3). Unlike [canSendFile] it is gated on the
+    // peer's bit: a build that gains one re-mints its profile at once ([MeshManager]'s custodyPresentsOtherThan), so the
+    // bit is rarely stale, and a button that only ever answers "they can't take calls" is worse than none.
+    // [ChatViewModel.startCall] still refuses with that line should a press race a profile.
+    val canCall: Boolean = false,
+    // Whether it offers a mesh call — a walkie-talkie over the mesh (docs/VOICE_CALLS.md §3.11) — in a build that runs
+    // one, gated as [canCall] is. Where both are offered, which the top bar shows and which the overflow is
+    // [ChatViewModel.meshCallFirst].
+    val canMeshCall: Boolean = false,
+    // True when this thread is the **Meshtastic room** — the paired radio's primary channel, mirrored into a
+    // room on this phone. It is a public room like Nearby, and shares its glyph and its "no attachments"
+    // refusal, but its authors are not Knit peers: no verified badge, nothing to tap through to, and a contact
+    // it lines a post up with is still an unverified match. Distinct from [isRoom] because almost every rule
+    // that reads that flag is really asking "is this Nearby", and answering yes here would put a stranger's
+    // unauthenticated name wherever Knit shows a person it vouches for.
+    val isBridged: Boolean = false,
+    // True when this thread is a **commons** — a relay's private room (§7.4). A room with no typing cue, taking
+    // what a group takes; its authors are pinned peers, so every bubble wears a real name and avatar and taps
+    // through to a profile.
+    val isCommons: Boolean = false,
+    // True for a commons whose relay takes no attachments for it (S-7.4-5, [RelayFacts.textOnlyRooms]): the composer
+    // offers text alone. False while that relay is down, when what it takes is not known.
+    val commonsTextOnly: Boolean = false,
+    // True for a commons its relay does not run ([RelayFacts.staleRooms]): the operator rotated the invite, so the
+    // room has gone quiet for good, the thread says why, and nothing more can be posted, quoted or reacted there.
+    val commonsStale: Boolean = false,
+    // The UTF-8 bytes a post's words may occupy here, or null in every thread that is not the Meshtastic
+    // room. A hard cap rather than the soft LoRa length hint: a Meshtastic frame carries one short line and
+    // the transmit path trims a longer one without asking, so the field refuses the overflow while the
+    // author can still choose what to cut. The whole line is the author's, since no name rides in front of
+    // it (ADR 2026-09.9469).
+    val publicPostBudget: Int? = null,
+    // Whether the radio channel this room mirrors is keyed with the stock Meshtastic key everybody holds
+    // ([LoraFacts.primaryKeyIsPublic]). It picks the wording of the standing notice and the composer hint —
+    // "unencrypted" where the key is public, "not end-to-end encrypted" where the user set their own — so
+    // the room never borrows the assurance the padlock gives every other thread. True where there is no
+    // board to ask, which is the pessimistic half of the claim rather than the accurate one.
+    val publicChannelKeyIsPublic: Boolean = true,
+    // Whether a post here still needs the first-use disclosure. Read only by [isBridged] threads.
+    val needsPublicConsent: Boolean = false,
+    // Whether the thread holds messages older than the loaded window, so the screen can draw a loading row
+    // above the oldest bubble and ask for the next page as the reader reaches it. See [ChatWindow].
+    val hasOlder: Boolean = false,
+    // True only for the initial seed value (see [state]'s stateIn below), before the Room + DataStore +
+    // mesh flows have all first-emitted. A long thread takes long enough to read and fold into rows that
+    // the seed's empty list would otherwise render as "no messages yet" on a conversation that has
+    // hundreds — so the screen shows a bubble skeleton for that gap instead. Defaults false so every real
+    // combine emission — and the previews — render content; only the seed passes true.
+    val isLoading: Boolean = false,
+)
+
+/**
+ * The chat thread's state and every action a bubble or the composer can take.
+ *
+ * `LargeClass` is suppressed because this class *is* one screen's surface: a single 5-way state combine
+ * feeds one `ChatUiState`, and every action below mutates state that combine reads. What could leave has —
+ * the row/quote labels, the file gate and the ingest-failure mapping are pure top-level functions in
+ * `AttachmentLabels.kt`, and the reply snippet lives in `ReplyFormatting.kt`. What is left needs the same
+ * repositories, the same `viewModelScope` and the same one-shot event channel; splitting it would mean two
+ * owners of one screen's state, which is the shape `MeshtasticSession` avoids for the same reason.
+ * `TooManyFunctions` for the same reason: each public function is one action on that one screen, and
+ * `LongParameterList`: each constructor parameter is one collaborator Koin hands that screen.
+ */
+@Suppress("LargeClass", "LongParameterList", "TooManyFunctions")
+class ChatViewModel(
+    private val conversationId: String,
+    private val messages: MessageRepository,
+    private val groups: GroupRepository,
+    private val peers: PeerRepository,
+    private val reactions: ReactionRepository,
+    private val receipts: MessageReceiptRepository,
+    // Unsent composer text. App-scoped, not a field of this ViewModel: the write that keeps a draft is the
+    // one started as the user leaves, which is exactly when this scope is being cancelled.
+    private val drafts: DraftRepository,
+    private val meshManager: MeshController,
+    private val identity: Identity,
+    private val settings: SettingsStore,
+    private val notifier: Notifier,
+    private val attachments: AttachmentStore,
+    private val blobs: BlobRepository,
+    imageScreening: ImageScreeningService,
+    private val gallerySaver: GallerySaver,
+    // App-scoped on purpose: any number of voice-note bubbles can be on screen and only one may sound, so
+    // arbitration can't live in a per-screen ViewModel.
+    private val voicePlayer: VoicePlayer,
+    // The decoded link-preview cards, app-scoped like the blobs they come from: a card decoded for one thread
+    // is the same card in another, and the image loader reads the same store for its picture.
+    private val linkCards: LinkCardStore,
+    // Fetches the card for a link in this composer's draft — the sender-side half of link previews, the only
+    // half that ever touches the Internet, gated on the setting, the validated-Internet route and the audience.
+    private val linkPreviews: LinkPreviewService,
+    // Where "Send location" reads the device's position. Collected by the staged tile alone, between the pin
+    // tap and the send — see [startLocation] — and by nothing else in the app.
+    private val locationSource: LocationSource,
+    // The facts flow, not the repository that produces it. Narrow on purpose: this ViewModel needs a
+    // Flow<RelayFacts> and nothing else, and the production flow is an infinite poller — under a test's
+    // virtual clock its `delay` is instant, so a test that drives this VM with `advanceUntilIdle()` could
+    // never reach idle. Taking the flow lets a test supply a finite one.
+    relayFacts: Flow<RelayFacts>,
+    // The LoRa plane's facts, the same way (a pushed flow in production, but a test still supplies its own).
+    loraFacts: Flow<LoraFacts>,
+    // StaticFieldLeak: Koin hands every ViewModel the application context (`androidContext()`), never an Activity.
+    @field:SuppressLint("StaticFieldLeak") private val context: Context,
+    // Direct Wi-Fi transfers: the app-wide state machine whose live states overlay this thread's records.
+    private val transfers: TransferManager,
+    // The joined commons (docs/SPOOL_PROTOCOL.md §7.4): a room's name and members, for a commons thread.
+    // Nullable and last so every existing test rig that builds this ViewModel positionally still compiles;
+    // a plain parameter, because only the [publicIdentity] initializer reads it.
+    commons: CommonsRepository? = null,
+    // A save opens a sealed attachment, which is when an older one learns its plaintext name, so a forward of the
+    // saved copy reuses the identity it came under (ADR 2026-10.mptm). Stateless; defaulted for every test rig.
+    private val identities: AttachmentIdentities = AttachmentIdentities(messages, blobs),
+    // Voice calls (experimental, di/CallWiring): null in a build that wires none, which hides the call button.
+    private val calls: CallManager? = null,
+    // Free accounts' notice (docs/VOICE_CALLS.md C-7.6-34): null where tickets are not wired, which shows none.
+    private val freeUploads: FreeUploads? = null,
+    // The Calls screen's "Prefer mesh calls" (C-3.11-3): on, [meshCallFirst] holds whatever the route says and a DM
+    // offers only the calls its peer takes. A plain parameter, read by the initializers alone.
+    preferMeshCalls: Flow<Boolean> = flowOf(false),
+    // This phone's "Connect directly to contacts" switch, in a build that wires direct links (ADR 2026-10.a5yj): the
+    // relay marker's dialog then says a link can carry what no relay takes ([ChatUiState.relayDirectLinkNote]). A plain
+    // parameter, read by the initializers alone.
+    directLinksOn: Flow<Boolean> = flowOf(false),
+    // A voice note's text on tap (ADR 2026-10.am8d): null where speech is not wired, which draws no control.
+    private val noteSpeech: VoiceNoteSpeech? = null,
+    // The offline translation spike (ADR 2026-10.t2h6): null where it is not wired, which offers no Translate. A plain
+    // parameter: the property below gates it on the constant.
+    translation: ChatTranslation? = null,
+    // Pinned messages (#42), local to this phone: null in a rig that wires none, which offers no Pin and draws no bar.
+    private val pins: PinRepository? = null,
+    // Delete-for-me, shared with the debug bridge's PURGE so the two cannot drift. Stateless; defaulted for every rig.
+    private val localDelete: LocalMessageDelete = LocalMessageDelete(messages, reactions, receipts, blobs, pins),
+    // Which URIs from another app (a share, a paste, a keyboard insert, a picker) may be read at all (#284, ADR
+    // 2026-11.vdx4). No default: every rig names the rule it runs under, and an admit-all default would fail open.
+    private val outsideUris: OutsideUris,
+) : ViewModel() {
+    // Null by a constant in a build without translation (TRANSLATE_WIRED), so R8 drops every path that reads it.
+    private val translation: ChatTranslation? = if (TRANSLATE_WIRED) translation else null
+
+    /** This thread is the broadcast room (vs a 1:1 DM keyed by the peer's node id). */
+    private val isRoom = conversationId == Conversations.NEARBY
+
+    /** This thread is the Meshtastic room — the paired radio's primary channel; its authors are not peers. */
+    private val isBridged = conversationId == Conversations.MESHTASTIC
+
+    /**
+     * This thread is a commons — a relay's private room (§7.4). A room like Nearby (addressed to nobody,
+     * names on every bubble, text only) whose authors are pinned peers like a group's, so their names,
+     * avatars and profiles are real; it has no roster to gate on, and its ticks take the group's route.
+     */
+    private val isCommons = Conversations.kindFor(conversationId) == ConversationKind.COMMONS
+
+    private val myNodeId = MutableStateFlow<String?>(null)
+
+    /** True while the chat is on screen; drives the read watermark below. */
+    private val chatForeground = MutableStateFlow(false)
+
+    /** Image staged in the input bar, ready to send with the next message (null when none). */
+    private val _pendingAttachment = MutableStateFlow<AttachmentStore.Ingested?>(null)
+    val pendingAttachment: StateFlow<AttachmentStore.Ingested?> = _pendingAttachment.asStateFlow()
+
+    /** The composer's text as typed, fed by the screen so a link in it can grow a card. */
+    private val draft = MutableStateFlow("")
+
+    /**
+     * What this thread's composer was left with last time, read once at construction. Held as a [Deferred]
+     * because the screen has to *wait* for it: the composer reports its empty field the moment it composes,
+     * and persisting that report before this read lands would erase the very draft it is fetching.
+     */
+    private val storedDraft: Deferred<Draft> = viewModelScope.async { drafts.load(conversationId) }
+
+    /**
+     * The text this thread's drafts row holds — or is scheduled to hold, since writes are debounced — and
+     * null until the screen has taken [storedDraft] (see [consumeRestoredDraft]). Until then no draft report
+     * is persisted, so a chat opened and left again before the read lands keeps what was in it.
+     *
+     * A report equal to it is not an edit. The composer's collectors cannot tell a keystroke from a
+     * programmatic set, so the restore itself comes back through [onDraftChanged] — on whichever side of the
+     * collector's start the read lands — and so does the fresh initial snapshot after a recomposition (a
+     * rotation, a profile screen popped off the chat). Persisting either would re-stamp the row's `updatedAt`
+     * and float `Draft: …` back over a message that landed after it. Main-thread-confined, like [dismissedUrl].
+     */
+    private var persisted: Draft? = null
+
+    /**
+     * The text [consumeRestoredDraft] handed to the composer, until the user types past it. Read and cleared
+     * only by [onUserTyping], so the draft collector racing the typing one cannot change its answer.
+     */
+    private var restored: String? = null
+
+    /** Bumped when the draft is sent or a card dismissed, so a fetch still in flight cannot stage into the next draft. */
+    private val draftEpoch = MutableStateFlow(0)
+
+    /** Per-draft memory, main-thread-confined: the link whose card the user removed, and links that yielded none. */
+    private var dismissedUrl: String? = null
+    private val failedUrls = HashSet<String>()
+
+    private val _linkPreviewLoading = MutableStateFlow(false)
+
+    /** True while a card is being fetched for the draft; the composer shows a transient "Loading preview…" line. */
+    val linkPreviewLoading: StateFlow<Boolean> = _linkPreviewLoading.asStateFlow()
+
+    /**
+     * Live state of an in-progress recording, or null when the mic is idle. [elapsedMs] drives the counter,
+     * [amplitude] the level meter, and [locked] distinguishes hands-free recording (the user slid up) from
+     * hold-to-talk, where letting go ends it.
+     */
+    data class VoiceRecording(
+        val elapsedMs: Long,
+        val amplitude: Float,
+        val locked: Boolean,
+    )
+
+    private val _voiceRecording = MutableStateFlow<VoiceRecording?>(null)
+    val voiceRecording: StateFlow<VoiceRecording?> = _voiceRecording.asStateFlow()
+
+    /** Playback state of whichever voice note is loaded app-wide; a bubble matches it against its own hash. */
+    val voicePlayback: StateFlow<VoicePlayer.Playback?> = voicePlayer.nowPlaying
+
+    /**
+     * What the voice bubbles may offer for their text (ADR 2026-10.am8d): null where speech is not wired or the Calls
+     * screen's switch is off, which draws no control at all.
+     */
+    val voiceSpeech: StateFlow<VoiceSpeechView?> =
+        noteSpeech
+            ?.let { speech ->
+                combine(speech.enabled, speech.model, speech.notes) { on, model, notes ->
+                    if (on) VoiceSpeechView(model, notes, speech.modelBytes) else null
+                }
+            }?.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+            ?: MutableStateFlow(null)
+
+    // The note a download was started for: transcribed once the model is in, if this chat is still open.
+    private var awaitingModel: Pair<String, String?>? = null
+
+    init {
+        noteSpeech?.let { speech ->
+            viewModelScope.launch {
+                speech.model.collect { state ->
+                    if (state !is SttModelState.Ready) return@collect
+                    val (hash, key) = awaitingModel ?: return@collect
+                    awaitingModel = null
+                    speech.transcribe(hash, key)
+                }
+            }
+        }
+    }
+
+    /**
+     * Transcribes the voice note under [hash] (opened with [key] when sealed). False when the model is not on the
+     * phone, so the bubble offers its download instead.
+     */
+    fun transcribeVoice(
+        hash: String,
+        key: String?,
+    ): Boolean {
+        val speech = noteSpeech ?: return false
+        if (speech.model.value !is SttModelState.Ready) return false
+        speech.transcribe(hash, key)
+        return true
+    }
+
+    /** Whether the model's download would ride a metered route now, for the offer to say so. */
+    fun speechDownloadMetered(): Boolean = noteSpeech?.metered() == true
+
+    /** Starts the speech model's download, then transcribes the note under [hash] once it is in. */
+    fun downloadSpeechThenTranscribe(
+        hash: String,
+        key: String?,
+    ) {
+        val speech = noteSpeech ?: return
+        awaitingModel = hash to key
+        if (speech.model.value is SttModelState.Ready) {
+            awaitingModel = null
+            speech.transcribe(hash, key)
+        } else if (speech.model.value !is SttModelState.Downloading) {
+            speech.download()
+        }
+    }
+
+    /**
+     * The language this phone's reader wants translations in (ADR 2026-10.t2h6's 2026-10-29 and 2026-11-02
+     * amendments, [ReaderLanguages]): the choice in Settings, else the system's list unless it is English, else what
+     * they write. Read again each time a chat opens.
+     */
+    private val readerLanguage: StateFlow<TranslateLang?> =
+        translation?.reader?.stateIn(viewModelScope, SharingStarted.Eagerly, null) ?: MutableStateFlow(null)
+
+    /** Settings › Chats › Translation: off, no bubble, menu or composer offers translation and nothing is declared. */
+    private val translationOn: StateFlow<Boolean> =
+        translation?.let { settings.translationEnabled.stateIn(viewModelScope, SharingStarted.Eagerly, false) }
+            ?: MutableStateFlow(false)
+
+    /**
+     * What the bubbles show of translations (ADR 2026-10.t2h6), with Content filtering's switch for a flagged one: null
+     * where translation is not wired, which offers no Translate.
+     */
+    val translateView: StateFlow<TranslateView?> =
+        translation
+            ?.let { t ->
+                combine(t.translations, t.models, settings.contentFilteringEnabled, readerLanguage, translationOn) {
+                    done,
+                    models,
+                    filterOn,
+                    reader,
+                    on,
+                    ->
+                    // Off in Settings: null, as in a build without translation, so nothing is drawn or offered.
+                    if (on) TranslateView(done, models, filterOn, reader) else null
+                }
+            }?.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+            ?: MutableStateFlow(null)
+
+    /** A message whose language the reader is asked for, and the languages offered, likeliest first. */
+    data class TranslateAsk(
+        val row: ChatRow,
+        val choices: List<TranslateLang>,
+    )
+
+    private val _translateAsk = MutableStateFlow<TranslateAsk?>(null)
+
+    /** The message whose language the reader is asked for: the identifier could not tell, or guessed wrong. */
+    val translateAsk: StateFlow<TranslateAsk?> = _translateAsk.asStateFlow()
+
+    // What each message's language was resolved to on this chat's screen, by message id: the Translate offer resolves
+    // it when the menu opens, and the tap that follows reuses it.
+    private val resolutions = mutableMapOf<String, Resolution>()
+
+    // Translations a download was started for, by direction: run once that model is in, if this chat is still open.
+    private val awaitingTranslation = mutableMapOf<TranslateDirection, MutableList<ChatRow>>()
+
+    // Which rows' language a prior guessed rather than the words read, kept across a model's download.
+    private val guessedRows = mutableMapOf<String, Boolean>()
+
+    init {
+        translation?.let { t ->
+            viewModelScope.launch {
+                t.models.collect { models ->
+                    models
+                        .filterValues { it is SttModelState.Ready }
+                        .keys
+                        .forEach { direction ->
+                            awaitingTranslation
+                                .remove(
+                                    direction,
+                                )?.forEach { translateRow(t, it, direction.from, direction.to, guessedRows[it.id] == true) }
+                        }
+                }
+            }
+        }
+    }
+
+    /**
+     * Translates [row]'s body into the reader's language ([TranslateTarget]), from [from] or, without it, from what the
+     * identifier and the priors read. An unsure read asks the reader ([translateAsk]); a missing model shows its
+     * download in the bubble, and a language with nowhere to go says so there.
+     */
+    fun translateMessage(
+        row: ChatRow,
+        from: TranslateLang? = null,
+    ) {
+        val t = translation ?: return
+        if (row.body.isBlank()) return
+        _translateAsk.value = null
+        viewModelScope.launch {
+            val reader = readerLanguage.value
+            if (from != null) {
+                // The reader said which language it is: no guess to offer a way out of.
+                translateRow(t, row, from, TranslateTarget.of(from, reader), guessed = false)
+                return@launch
+            }
+            // Sure words and the sender's declaration can disagree: the reading with somewhere to go (ADR 2026-11.tj49).
+            val resolution = TranslateTarget.forReader(resolve(t, row), reader)
+            when (val pick = resolution.pick) {
+                is LanguagePick.Picked -> {
+                    translateRow(t, row, pick.lang, TranslateTarget.of(pick.lang, reader), guessed = resolution.guessed)
+                }
+
+                LanguagePick.Unsure -> {
+                    _translateAsk.value = TranslateAsk(row, choices(resolution, row, exclude = null))
+                }
+
+                // A language no model here translates from: the menu offers nothing, and a stale tap does nothing.
+                is LanguagePick.Other -> {}
+            }
+        }
+    }
+
+    /**
+     * Whether [row]'s menu offers Translate (ADR 2026-10.t2h6's 2026-10-29 amendment): not on a message already in the
+     * reader's language by its words or its author's declaration, nor on one already translated into it. A language
+     * only a prior settled keeps the offer, as does one nobody can tell: the reader may know better.
+     */
+    suspend fun offersTranslate(row: ChatRow): Boolean {
+        val t = translation ?: return false
+        if (row.body.isBlank() || !translationOn.value) return false
+        val reader = readerLanguage.value
+        row.translation?.let { kept -> return TranslateTarget.offersAgain(kept, reader) }
+        return TranslateTarget.offers(resolve(t, row), reader)
+    }
+
+    /** "Not English?": [row] is not in [wrong]. One language left translates at once; more ask which. */
+    fun notThisLanguage(
+        row: ChatRow,
+        wrong: TranslateLang,
+    ) {
+        val t = translation ?: return
+        viewModelScope.launch {
+            val left = choices(resolve(t, row), row, exclude = wrong)
+            left.singleOrNull()?.let { translateMessage(row, it) } ?: run { _translateAsk.value = TranslateAsk(row, left) }
+        }
+    }
+
+    // The row's language, resolved once per screen: the menu's offer and the tap read the same answer.
+    private suspend fun resolve(
+        t: ChatTranslation,
+        row: ChatRow,
+    ): Resolution =
+        resolutions[row.id] ?: t
+            .resolve(
+                row.body,
+                mentionRanges(row),
+                conversationId,
+                row.senderNodeId,
+                threadLanguage.value,
+                row.bodyLang,
+            ).also { resolutions[row.id] = it }
+
+    // Every language a model translates from, the likeliest for [row] first.
+    private fun choices(
+        resolution: Resolution,
+        row: ChatRow,
+        exclude: TranslateLang?,
+    ): List<TranslateLang> {
+        val locale = Locale.getDefault()
+        val likely = resolution.ranked + listOfNotNull(row.bodyLang?.let(TranslateLang::ofCode), threadLanguage.value)
+        return LanguageChoices.order(likely, TranslateDirection.sources, { LanguageNames.name(it, locale) }, exclude)
+    }
+
+    /** The reader closed the "Which language is this?" question. */
+    fun dismissTranslateAsk() {
+        _translateAsk.value = null
+    }
+
+    /** Whether a model's download would ride a metered route now, for the bubble to ask first. */
+    fun translateDownloadMetered(): Boolean = translation?.metered() == true
+
+    /** Starts [direction]'s download, then translates [row] once the model is in. */
+    fun downloadTranslateModel(
+        row: ChatRow,
+        direction: TranslateDirection,
+    ) {
+        val t = translation ?: return
+        awaitingTranslation.getOrPut(direction) { mutableListOf() }.apply { removeAll { it.id == row.id } }.add(row)
+        if (t.models.value[direction] !is SttModelState.Downloading) t.download(direction)
+    }
+
+    /** "Show original only": the bubble drops [messageId]'s translation. */
+    fun dismissTranslation(messageId: String) {
+        translation?.dismiss(messageId)
+    }
+
+    private fun translateRow(
+        t: ChatTranslation,
+        row: ChatRow,
+        from: TranslateLang,
+        to: TranslateLang?,
+        guessed: Boolean,
+    ) {
+        guessedRows[row.id] = guessed
+        t.translate(row.id, row.body, from, to, Conversations.isPublicRoom(conversationId), mentionRanges(row), guessed)
+    }
+
+    // Where the row's mentions sit in its body, for the translation to hand back untouched.
+    private fun mentionRanges(row: ChatRow): List<IntRange> = mentionSpans(row.body, row.mentions).map { it.start until it.end }
+
+    // Built lazily so a chat that never records never opens a recorder, and torn down in onCleared: the
+    // microphone is exclusive, and leaking it would block every other app until this process died.
+    private val recorder by lazy { VoiceRecorder(context, viewModelScope) }
+
+    // Ticks the recording UI. Cancelled by every path that ends a recording.
+    private var recordingTicker: Job? = null
+
+    /** One-shot UI messages (a string res id), surfaced as toasts — e.g. the result of saving an image. */
+    private val autoMeshFirst = MutableStateFlow(false)
+
+    /**
+     * True while a mesh call is the one to offer first (§3.11): always, while the person prefers mesh calls (the state
+     * offers it only toward a peer carrying the walkie), else while the peer runs the walkie and no live path
+     * looks possible. The top bar shows that call and the overflow the other.
+     * The route is re-read while the chat is on screen, since the Internet route and the neighbours it rests on come
+     * and go.
+     */
+    val meshCallFirst: StateFlow<Boolean> =
+        combine(autoMeshFirst, preferMeshCalls) { auto, preferred -> preferred || auto }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val _events = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val events: SharedFlow<Int> = _events.asSharedFlow()
+
+    /** A received file just saved where the user chose, for the screen to open in whatever app claims it. */
+    private val _savedFiles = MutableSharedFlow<SavedFile>(extraBufferCapacity = 1)
+    val savedFiles: SharedFlow<SavedFile> = _savedFiles.asSharedFlow()
+
+    /** A tapped file that has no saved copy to open, for the screen to send through the storage picker. */
+    private val _saveNeeded = MutableSharedFlow<PendingSave>(extraBufferCapacity = 1)
+    val saveNeeded: SharedFlow<PendingSave> = _saveNeeded.asSharedFlow()
+
+    /** Emitted once the DM's peer is blocked, so the screen can close (the thread is now hidden). */
+    private val _closeChat = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val closeChat: SharedFlow<Unit> = _closeChat.asSharedFlow()
+
+    /**
+     * Emitted after a message is accepted and sent, so the screen clears its input field/mentions. The
+     * screen no longer clears optimistically: if [send] blocks the text for abuse, nothing is emitted and
+     * the user keeps their draft to edit.
+     */
+    private val _clearInput = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val clearInput: SharedFlow<Unit> = _clearInput.asSharedFlow()
+
+    /**
+     * The rows the window returned, paired with the limit that produced them. The pairing is load-bearing:
+     * [ChatUiState.hasOlder] compares the two, and reading [windowLimit] on its own would measure the *next*
+     * limit against the *previous* rows for the moment between a page being asked for and arriving — long
+     * enough to blink the "loading older" row out from under the user mid-page.
+     */
+    private data class Window(
+        val limit: Int,
+        val messages: List<MessageEntity>,
+    )
+
+    // How far back into the thread the screen currently reads. Grown a page at a time by [loadOlder] as the
+    // user scrolls into history, or jumped straight to a depth by [revealMessage] for a tapped reply quote.
+    private val windowLimit = MutableStateFlow(ChatWindow.INITIAL)
+
+    /**
+     * This thread's window: the newest [windowLimit] messages, oldest first. **The screen's only subscription
+     * to the messages table** — the link-preview walk, the read watermark and the row fold all read this one.
+     * Three separate collectors meant Room re-ran the query and rebuilt the whole list three times over for
+     * every write to `messages` anywhere in the app, since invalidation is per-table, not per-query.
+     *
+     * A `StateFlow` rather than a `shareIn` so [loadOlder] can see the window that actually rendered; null
+     * until the first emission, which every consumer drops with `filterNotNull()`.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val windowed: StateFlow<Window?> =
+        windowLimit
+            // No distinctUntilChanged: a StateFlow already conflates equal values, so re-collecting the same
+            // limit is impossible and the operator is a deprecated no-op on this receiver.
+            .flatMapLatest { limit ->
+                messages.observeNewestMessages(conversationId, limit).map { Window(limit, it) }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // The hashes this screen can show a size for: every attachment in the window plus the one staged in the
+    // composer. The raw window rather than the blocked-filtered rows — a superset costs nothing and keeps the
+    // derivation off the block list. Distinct, so a message write that leaves the set alone (most of them)
+    // never re-subscribes the blob read below.
+    private val heldHashes: Flow<Set<String>> =
+        combine(
+            windowed.filterNotNull().map { window -> window.messages.mapNotNull { it.attachmentHash }.toSet() },
+            _pendingAttachment.map { it?.hash },
+        ) { window, staged -> if (staged == null) window else window + staged }.distinctUntilChanged()
+
+    /**
+     * Hash → held byte length for [heldHashes]. **The screen's only subscription to the blobs table** — the
+     * row fold, the link-card walk and the staged attachment's reach all read this one. Two collectors of
+     * the old whole-table `observeSizes()` meant Room decrypted every leaf page of the largest table in the
+     * database twice per blob write anywhere in the app (an attachment or avatar landing, a send) for as
+     * long as any chat was open; bounded to the window it is one primary-key seek per shown attachment, and
+     * a thread with nothing to size holds no subscription at all. Shaped like [windowed]: null until the
+     * first emission, which every consumer drops with `filterNotNull()`.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val heldSizes: StateFlow<Map<String, Int>?> =
+        heldHashes
+            .flatMapLatest { blobs.observeSizes(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    // Hash → holder → the plane its proof of holding came over, for the same hashes: the link mark ([shownPlane]) and the
+    // sender's relay marker both read it. The holders table, not the blobs table, so [heldSizes] stays the screen's only
+    // read of the blobs.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val holders: Flow<Map<String, Map<String, Int>>> = heldHashes.flatMapLatest { blobs.observeHolders(it) }
+
+    // The window's attachments still on their way: shown, not held, and not a link card (a card never draws
+    // progress). Read off the one shared [heldSizes] — never a second blob query (ADR 2026-09.fjcw) — and only
+    // once it has answered, so a thread does not count every attachment as missing for its first frame.
+    private val awaitedHashes: Flow<Set<String>> =
+        combine(windowed.filterNotNull(), heldSizes.filterNotNull()) { window, held ->
+            window.messages
+                .filter { it.attachmentMime != LinkPreviewBlob.MIME }
+                .mapNotNullTo(HashSet()) { m -> m.attachmentHash?.takeUnless { it in held } }
+        }.distinctUntilChanged()
+
+    /**
+     * Hash → how far each awaited attachment in the window has got, for the bubbles' progress ring (#115). Polls
+     * the links ([MeshController.arrivals]) only while something in the window is awaited: a settled thread holds
+     * no subscription at all. A side value like [voicePlayback], out of [state] on purpose — a ring moving twice a
+     * second must not rebuild every row.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val arrivals: StateFlow<Map<String, ArrivingFile>> =
+        awaitedHashes
+            .flatMapLatest { wanted ->
+                if (wanted.isEmpty()) flowOf(emptyMap()) else meshManager.arrivals.map { all -> all.filterKeys(wanted::contains) }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /**
+     * Transfer id → whether the file that row's Retry would send can still be read. Each sender's row that could
+     * offer Retry is checked once, off the main thread (`watchRetrySources`), and a Retry that finds its file gone
+     * after all is recorded false. A moved or deleted file, or a lost grant, then hides the button instead of
+     * failing on the tap. A row nobody has checked draws no Retry.
+     */
+    private val retrySources = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+
+    // Held blob sizes + moderation-flagged hashes plus the content-filtering setting, and the decoded
+    // link-preview cards, combined upstream so the main bundle stays at the typed 5-flow combine overload.
+    // The setting only gates receive-side *hiding* (the chat blur + toxic-text collapse below), so toggling
+    // it reactively reveals/hides already-received content without re-screening; what you can send is
+    // enforced elsewhere regardless.
+    private val blobState =
+        combine(
+            combine(heldSizes.filterNotNull(), holders, ::Pair),
+            imageScreening.observeFlaggedHashes(),
+            // The download limit rides with the filter: both are settings that change how a received attachment shows.
+            combine(settings.contentFilteringEnabled, settings.bluetoothDownloadLimitBytes) { hide, limit -> hide to limit },
+            linkCards.cards,
+            combine(transfers.states, retrySources) { live, readable -> live to readable },
+        ) { (sizes, held), flagged, (hideSensitive, limit), cards, (live, readable) ->
+            val link =
+                held
+                    .mapValues { (_, by) -> by.filterValues { it == DeliveryPlane.DirectLink.code }.keys }
+                    .filterValues { it.isNotEmpty() }
+            val proven = held.mapValues { (_, by) -> by.keys }
+            BlobState(sizes, link, proven, flagged.toSet(), hideSensitive, limit, cards, live, readable)
+        }
+
+    init {
+        viewModelScope.launch { myNodeId.value = identity.nodeId() }
+        calls?.takeIf { it.walkieEnabled }?.let { walkie ->
+            viewModelScope.launch {
+                chatForeground.collectLatest { foreground ->
+                    while (foreground) {
+                        autoMeshFirst.value = walkie.prefersWalkie(conversationId)
+                        delay(MESH_CALL_RECHECK_MS)
+                    }
+                }
+            }
+        }
+        watchDraftForLinks()
+        watchRetrySources()
+        // Decode every link-preview card in this thread whose blob has landed, once; the store dedups and the
+        // rows pick the result up through blobState. The pair list is distinct so a size change elsewhere in
+        // the table does not re-walk the thread.
+        viewModelScope.launch {
+            combine(windowed.filterNotNull(), blobState) { window, blob ->
+                window.messages.mapNotNull { m ->
+                    val hash = m.attachmentHash
+                    if (m.attachmentMime == LinkPreviewBlob.MIME && hash != null && hash in blob.sizes) hash to m.attachmentKey else null
+                }
+            }.distinctUntilChanged().collect { held ->
+                held.forEach { (hash, key) -> linkCards.ensure(hash, key) }
+            }
+        }
+        // Advance this conversation's read watermark while the chat is on screen: on every stream
+        // emission (so messages arriving while you read don't reappear as unread), stamp newest sentAt.
+        viewModelScope.launch {
+            combine(chatForeground, windowed.filterNotNull()) { foreground, window ->
+                // The window is anchored at the newest end and handed over oldest-first, so its last row is
+                // the thread's newest message — no scan. Deliberately the *raw* window rather than the
+                // blocked-filtered rows: if a blocked peer sent the newest message, skipping it here would
+                // leave the thread showing unread forever.
+                if (foreground) window.messages.lastOrNull()?.sentAt else null
+            }.distinctUntilChanged().collect { watermark ->
+                if (watermark != null) settings.setLastReadAt(conversationId, watermark)
+            }
+        }
+    }
+
+    // Bundles the four message-related streams so the outer combine below stays at the 5-flow typed
+    // overload (a 6th flow falls back to unchecked Array<*> casts). Blocked senders' messages are
+    // filtered out here, so they also drop out of rows and mention candidates. Carrying the window's
+    // blob sizes here is what flips an attachment from "loading" to shown when its bytes arrive — and,
+    // since the same rows carry the byte length, what tells the UI whether those bytes can cross a relay.
+    private data class MessagesBundle(
+        val messages: List<MessageEntity>,
+        // Everyone who has ever posted here, straight from the table rather than from [messages] — the
+        // window only reaches back so far, and who you can @-mention must not depend on how far you scrolled.
+        val senders: List<String>,
+        // Whether the thread holds anything older than the window. Computed on the *raw* window, before the
+        // blocked filter below: a window made entirely of blocked senders folds to zero rows, and measuring
+        // that would report an empty thread with all its history still sitting behind it.
+        val hasOlder: Boolean,
+        val reactions: List<ReactionEntity>,
+        val blocked: Set<String>,
+        val blobSizes: Map<String, Int>,
+        // blob hash -> who a contact's direct link proved holds it ([shownPlane]).
+        val linkHolders: Map<String, Set<String>>,
+        // blob hash -> who a radio or a contact's direct link proved holds it (ADR 2026-10.vy27): the relay marker's end.
+        val provenHolders: Map<String, Set<String>>,
+        val flaggedHashes: Set<String>,
+        val hideSensitiveContent: Boolean,
+        // "Ask before large Bluetooth downloads" in bytes, null for never (ADR 2026-10.js2p).
+        val downloadLimit: Long?,
+        // blob hash -> the decoded link-preview card, for every card this process has opened so far.
+        val linkCards: Map<String, LinkCard>,
+        // transfer id -> its live state, for the direct-transfer cards in this thread.
+        val transfers: Map<String, TransferState>,
+        // transfer id -> whether the file its Retry would send can still be read ([retrySources]).
+        val retrySources: Map<String, Boolean>,
+        val group: GroupEntity?,
+        // messageId -> how many current roster members have acked it. Empty outside a group.
+        val deliveredCounts: Map<String, Int>,
+        // messageId -> their LoRa radio acked our DM (MeshController.loraRadioReached). Empty outside a DM thread.
+        val radioReached: Map<String, LoraRadioReached>,
+    )
+
+    // What the blob table and the moderation cache say about every attachment, folded into one arm of the
+    // message bundle so it stays at the typed 5-flow combine overload.
+    private data class BlobState(
+        val sizes: Map<String, Int>,
+        val linkHolders: Map<String, Set<String>>,
+        val provenHolders: Map<String, Set<String>>,
+        val flagged: Set<String>,
+        val hideSensitive: Boolean,
+        val downloadLimit: Long?,
+        val linkCards: Map<String, LinkCard>,
+        val transfers: Map<String, TransferState>,
+        val retrySources: Map<String, Boolean>,
+    )
+
+    // The group row paired with "how many members have acked each message", re-subscribed whenever the
+    // roster changes (a departure changes the denominator AND which receipts count). Not a group ⇒ no
+    // roster ⇒ no counts, and the tick keeps its plain wording.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val groupDelivery: Flow<Pair<GroupEntity?, Map<String, Int>>> =
+        groups
+            .observeGroup(conversationId)
+            .distinctUntilChanged()
+            .flatMapLatest { group ->
+                val roster = group?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+                if (roster.isEmpty()) {
+                    flowOf(group to emptyMap())
+                } else {
+                    receipts.observeDeliveredCounts(conversationId, roster).map { group to it }
+                }
+            }
+
+    // Which of our DMs here their LoRa radio has acked, in memory (ADR 040's 2026-10-31 amendment). A DM thread only: a
+    // group, a room or a commons never takes a compact copy, so they never subscribe.
+    private val radioReached: Flow<Map<String, LoraRadioReached>> =
+        if (Conversations.kindFor(conversationId) == ConversationKind.DM) meshManager.loraRadioReached else flowOf(emptyMap())
+
+    // The window paired with this thread's full sender list and the radio-reached evidence, folded first so the bundle
+    // below stays at the typed 5-flow combine overload.
+    private val windowWithSenders =
+        combine(
+            windowed.filterNotNull(),
+            messages.observeSendersIn(conversationId),
+            radioReached,
+        ) { window, senders, reached -> Triple(window, senders, reached) }
+
+    private val messagesWithReactions =
+        combine(
+            windowWithSenders,
+            reactions.observeReactionsIn(conversationId),
+            settings.blockedNodeIds,
+            blobState,
+            groupDelivery,
+        ) { (window, senders, reached), reacts, blocked, blob, (group, delivered) ->
+            MessagesBundle(
+                window.messages.filter { it.senderId !in blocked },
+                senders.filter { it !in blocked },
+                window.messages.size >= window.limit,
+                reacts,
+                blocked,
+                blob.sizes,
+                blob.linkHolders,
+                blob.provenHolders,
+                blob.flagged,
+                blob.hideSensitive,
+                blob.downloadLimit,
+                blob.linkCards,
+                blob.transfers,
+                blob.retrySources,
+                group,
+                delivered,
+                reached,
+            )
+        }
+
+    // The LoRa plane's facts + whoever this thread's notice is about, folded first so the LoRa notice costs
+    // the mesh-status combine one arm, not two.
+    private data class LoraThread(
+        val facts: LoraFacts,
+        val audience: LoraAudience,
+    )
+
+    // Which peers the notice reasons over — one shape per conversation kind, decided by the thread's id at
+    // construction, so a thread only ever computes the one it can use. The transport map is reduced to that
+    // shape before `distinctUntilChanged`, so another peer's sighting never rebuilds the screen.
+    private sealed interface LoraAudience {
+        /** A DM: the radios that currently reach this thread's peer; null when none do. */
+        data class Peer(
+            val kinds: Set<TransportKind>?,
+        ) : LoraAudience
+
+        /** The room, addressed to nobody: whether *anyone* at all sits behind the board. */
+        data class Room(
+            val loraOnly: Boolean,
+        ) : LoraAudience
+
+        /** A group: every id behind the board, narrowed to this group's roster where the state is built. */
+        data class Group(
+            val loraOnly: Set<String>,
+        ) : LoraAudience
+
+        /**
+         * The Meshtastic room, which has no LoRa audience to speak of: a post leaves through this phone's own
+         * board and a spent window is answered per send (a refusal the composer shows), so no standing
+         * congestion notice about delayed delivery applies. Its own object rather than reusing [Room]: that
+         * notice is about Knit's queue toward LoRa-only peers, and this room has no peers.
+         */
+        data object Bridged : LoraAudience
+    }
+
+    private val loraAudience: Flow<LoraAudience> =
+        meshManager.peerTransports
+            .map { transports ->
+                when (Conversations.kindFor(conversationId)) {
+                    ConversationKind.NEARBY -> LoraAudience.Room(transports.values.any(::isLoraOnly))
+
+                    ConversationKind.GROUP -> LoraAudience.Group(transports.filterValues(::isLoraOnly).keys)
+
+                    ConversationKind.DM -> LoraAudience.Peer(transports[conversationId])
+
+                    // A commons post never leaves by a radio at all, so it has no LoRa audience either.
+                    ConversationKind.MESHTASTIC, ConversationKind.COMMONS -> LoraAudience.Bridged
+                }
+            }.distinctUntilChanged()
+
+    private val loraThread =
+        combine(loraFacts, loraAudience) { facts, audience ->
+            LoraThread(facts, audience)
+        }.distinctUntilChanged()
+
+    // The relay plane's facts + whether the user has dismissed the room's notice, folded the same way and
+    // for the same reason as [LoraThread]: the dismissal only ever changes what the notice says, so it
+    // belongs beside the facts that notice reads rather than as another arm of the status combine.
+    private data class RelayThread(
+        val facts: RelayFacts,
+        val roomNoticeDismissed: Boolean,
+    )
+
+    private val relayThread =
+        combine(
+            relayFacts,
+            settings.relayRoomNoticeDismissed,
+        ) { facts, dismissed -> RelayThread(facts, dismissed) }.distinctUntilChanged()
+
+    // Neighbor count + radio health + the "who's typing" map + Internet-relay reach + the LoRa thread folded
+    // into one source so the main state combine stays within its five-flow arity.
+    private data class MeshStatus(
+        val neighborCount: Int,
+        val transportHealth: TransportHealth,
+        val typing: Map<String, Set<String>>,
+        val relay: RelayThread,
+        val lora: LoraThread,
+    )
+
+    // Typing indicators off hides at once a cue already showing, which the pipeline then stops recording.
+    private val typingShown = combine(meshManager.typing, settings.typingIndicatorsEnabled) { typing, on -> if (on) typing else emptyMap() }
+
+    private val meshStatus =
+        combine(
+            meshManager.neighborCount,
+            meshManager.transportHealth,
+            typingShown,
+            relayThread,
+            loraThread,
+        ) { count, health, typing, relay, lora -> MeshStatus(count, health, typing, relay, lora) }
+
+    // Folded ahead of the state combine, whose typed arity stops at five: who this device posts to a room
+    // as, whether it may post to the foreign public channel, and — for a commons thread — the room's row and
+    // its members. The two commons flows are empty everywhere else (`flowOf`), so they cost nothing there.
+    // Rides with them: whether this phone's direct links switch is on.
+    private class PublicInputs(
+        val myName: String,
+        val publicConsented: Boolean,
+        val commonsRoom: CommonsEntity?,
+        val commonsMembers: List<String>,
+        val directLinksOn: Boolean,
+    )
+
+    private val publicIdentity: Flow<PublicInputs> =
+        combine(
+            settings.displayName,
+            settings.meshtasticPostConsented,
+            if (isCommons) commons?.observe(conversationId) ?: flowOf(null) else flowOf(null),
+            if (isCommons) commons?.observeMemberIds(conversationId) ?: flowOf(emptyList()) else flowOf(emptyList()),
+            directLinksOn,
+        ) { name, consented, room, roster, linksOn -> PublicInputs(name, consented, room, roster, linksOn) }
+
+    // The peer directory, read once for this screen: the thread state and the pinned bar both name senders from it, and
+    // each change to the peer table reads the whole table and rebuilds its label index, so it is shared, not collected
+    // twice. Replayed so the second collector starts from the current directory.
+    private val peerDirectory =
+        peers.observeDirectory().shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    val state: StateFlow<ChatUiState> =
+        combine(
+            messagesWithReactions,
+            peerDirectory,
+            meshStatus,
+            myNodeId,
+            publicIdentity,
+        ) { bundle, directory, mesh, me, publicId ->
+            val myName = publicId.myName
+            val publicConsented = publicId.publicConsented
+            val count = mesh.neighborCount
+            val health = mesh.transportHealth
+            val typingMap = mesh.typing
+            val relay = mesh.relay.facts
+            val msgs = bundle.messages
+            val reacts = bundle.reactions
+            val blocked = bundle.blocked
+            val blobSizes = bundle.blobSizes
+            val linkHolders = bundle.linkHolders
+            val provenHolders = bundle.provenHolders
+            val flaggedHashes = bundle.flaggedHashes
+            val hideSensitive = bundle.hideSensitiveContent
+            val downloadLimit = bundle.downloadLimit
+            val cards = bundle.linkCards
+            val liveTransfers = bundle.transfers
+            val retrySources = bundle.retrySources
+            val group = bundle.group
+            val deliveredCounts = bundle.deliveredCounts
+            val isGroup = group != null
+            // A thread with one peer behind it — the only shape that can be blocked or verified.
+            val isPeerThread = !isRoom && !isBridged && !isCommons && !isGroup
+            // A group's pinned roster, or a commons' seen members: both feed the @-mention candidates.
+            val members = group?.let { GroupMembersStore.decode(it.members) } ?: publicId.commonsMembers
+            val peersByNode = directory.byNode
+            // A DM peer on a Knit without forward secrecy: the relay notice says so instead of "not covered yet".
+            val peerLacksFs = isPeerThread && lacksForwardSecrecy(peersByNode[conversationId])
+            // Each call kind is offered only toward a peer whose pinned profile carries its bit (C-3.11-3), as on the
+            // profile screen: no button that can only answer "they can't take calls".
+            val peerCaps = peersByNode[conversationId]?.capabilities ?: 0L
+            val callable = isPeerThread && conversationId !in blocked
+
+            fun offers(bit: Long) = peerCaps and bit != 0L
+
+            // Whether this DM's peer proved it holds [hash] (ADR 2026-10.vy27), which ends a file's relay marker. A group
+            // sender asks no member for proof, and one member's holding says nothing of the others'.
+            fun proven(hash: String?) = isPeerThread && hash != null && conversationId in provenHolders[hash].orEmpty()
+
+            // Whether a row of ours may carry the relay marker at all: an attachment, not a link card, not yet proven held.
+            fun marksRelay(
+                m: MessageEntity,
+                mine: Boolean,
+            ) = mine && m.attachmentMime != LinkPreviewBlob.MIME && !proven(m.attachmentHash)
+            // Group once, then tally per emoji within each message's bucket. Orphan reactions (no matching
+            // message yet) simply never produce a row until their message arrives.
+            val reactionsByMessage = reacts.groupBy { it.messageId }
+            // Resolve each node id's label once for the whole fold. For an id absent from the peer table —
+            // every speaker in the Nearby and bridged rooms — PeerLabels has nothing cached and re-derives
+            // the alias tokens and runs its collision loop, and the rows below ask up to twice per message
+            // before the candidates and typing peers ask again.
+            val labels = HashMap<String, PeerLabel>()
+
+            fun label(nodeId: String) = labels.getOrPut(nodeId) { directory.label(nodeId) }
+            val selfLabel = context.getString(R.string.chat_self_name)
+            val rows =
+                msgs.map { m ->
+                    // A heard post's author is the Meshtastic speaker, NOT the row's sender — that is this
+                    // phone, by convention. Resolve the origin first so the name, avatar and tap target below
+                    // all follow from the same answer. A speaker whose board a contact's profile claimed
+                    // wears that contact's name and face; an unverified match unless the radio's signature
+                    // checked out (`MeshOrigin.verified`), so the bubble keeps the muted name and the
+                    // caveat-first avatar until it did.
+                    val origin = m.originNode?.let { node -> meshOriginFor(m, node) }
+                    val mine = m.senderId == me && origin == null
+                    val contact = origin?.peerId?.let { label(it) }
+                    val senderLabel = if (mine || origin != null) null else label(m.senderId)
+                    // Our own name above our own bubble where we set one; the pinned bar says "You" instead.
+                    val name = senderName(origin, m.senderId, me, selfName = myName.ifBlank { selfLabel }) { label(it).text }
+                    val tallies =
+                        reactionsByMessage[m.id]
+                            .orEmpty()
+                            .groupBy { it.emoji }
+                            .mapNotNull { (emoji, group) ->
+                                // emoji is non-null in the stream (tombstones are filtered in the DAO); guard anyway.
+                                if (emoji == null) {
+                                    null
+                                } else {
+                                    ReactionSummary(emoji, group.size, group.any { it.reactorNodeId == me })
+                                }
+                            }
+                    val heldBytes = m.attachmentHash?.let { blobSizes[it] }
+                    ChatRow(
+                        id = m.id,
+                        body = m.body,
+                        mine = mine,
+                        senderName = name,
+                        senderNodeId = m.senderId,
+                        senderDiscriminator = contact?.discriminator ?: senderLabel?.discriminator,
+                        senderPlainName = contact?.name ?: senderLabel?.name ?: name,
+                        // Groups only: the room's speakers are whoever is in range, the bridged room's are
+                        // not Knit peers at all, and a DM's header already carries the badge.
+                        senderVerified = isGroup && !mine && origin == null && peersByNode[m.senderId]?.verified == true,
+                        kind = m.kind,
+                        // Never our own avatar on a heard post (the sender column is ours by convention):
+                        // the resolved contact's face where there is one, else the letter avatar.
+                        avatarHash =
+                            when {
+                                origin != null -> origin.peerId?.let { peersByNode[it]?.avatarHash }
+                                else -> peersByNode[m.senderId]?.avatarHash
+                            },
+                        sentAt = m.sentAt,
+                        received = m.received,
+                        deliveredVia = shownPlane(m.receivedPlane, mine, me, conversationId, m.attachmentHash?.let(linkHolders::get)),
+                        // Only our own group sends have a "who has it" answer; the roster excludes us,
+                        // since we never ack ourselves (the details screen's rule, kept identical here).
+                        deliveredCount = if (mine && isGroup) deliveredCounts[m.id] ?: 0 else 0,
+                        recipientTotal = if (mine && isGroup) members.count { it != me } else 0,
+                        // The shared fold: a receipt wins, and only a DM of ours lifts.
+                        radioReached = mine && DeliveryStatus.of(m, bundle.radioReached[m.id]) == DeliveryStatus.RadioReached,
+                        moderationFlagged = m.hiddenByFilter(hideSensitive),
+                        attachmentHash = m.attachmentHash,
+                        attachmentMime = m.attachmentMime,
+                        attachmentAnimated = m.attachmentAnimated,
+                        attachmentKey = m.attachmentKey,
+                        voiceDurationMs = m.voiceDurationMs,
+                        voicePeaks = m.voicePeaks,
+                        voiceTranscript = m.voiceTranscript,
+                        translation = m.storedTranslation(),
+                        bodyLang = m.bodyLang,
+                        authorReads = m.authorReads,
+                        attachmentReady = heldBytes != null,
+                        attachmentName = m.attachmentName,
+                        attachmentSize = m.attachmentSize,
+                        attachmentBytes = heldBytes,
+                        // The rule the fetch asks too, so the card shows exactly while the fetch waits on it (ADR
+                        // 2026-10.js2p). A link card is never gated: it never draws a placeholder. Nor is a commons
+                        // attachment: the room's relay brings it whatever Bluetooth would take, and a tap asks no radio.
+                        attachmentAwaitsTap =
+                            !isCommons &&
+                                heldBytes == null &&
+                                m.attachmentHash != null &&
+                                m.attachmentMime != LinkPreviewBlob.MIME &&
+                                BluetoothFetchGate.fastOnly(m.attachmentSize, downloadLimit, m.attachmentFetchApproved, own = mine),
+                        attachmentFlagged = hideSensitive && m.attachmentHash != null && m.attachmentHash in flaggedHashes,
+                        videoDurationMs = m.videoDurationMs,
+                        videoWidth = m.videoWidth,
+                        videoHeight = m.videoHeight,
+                        videoPoster = m.videoPoster,
+                        posterFlagged = hideSensitive && m.videoPosterFlagged,
+                        // Outbound reach only: a received attachment has already arrived, so telling its
+                        // reader no relay carries it would describe a journey that is over. Unknown size
+                        // (bytes reclaimed by retention) falls through to Silent rather than guessing. A
+                        // link-preview card stays Silent too: a card that does not make the Internet
+                        // shortcut is no loss worth a marker. So does a DM file its peer proved it holds
+                        // (ADR 2026-10.vy27): delivered, it needs no relay, whatever plane carried it.
+                        attachmentRelay =
+                            if (heldBytes != null && marksRelay(m, mine)) {
+                                attachmentReach(conversationId, heldBytes, relay)
+                            } else {
+                                AttachmentRelay.Silent
+                            },
+                        // The mirror image: only while the bytes are missing, and only for a bubble that
+                        // draws a placeholder — a link card never spins, so it has nothing to wait on.
+                        attachmentWait =
+                            if (m.attachmentHash != null && heldBytes == null && m.attachmentMime != LinkPreviewBlob.MIME) {
+                                attachmentWait(conversationId, relay)
+                            } else {
+                                AttachmentWait.Nearby
+                            },
+                        linkCard = linkCardFor(m, cards),
+                        location = GeoUri.find(m.body),
+                        mentions = MentionStore.decode(m.mentions),
+                        styles = StyleStore.decode(m.styles),
+                        reactions = tallies,
+                        quote = quoteViewFor(m, mine, me, selfLabel) { label(it).text },
+                        origin = origin,
+                        transfer =
+                            if (m.kind ==
+                                MessageEntity.KIND_FILE_TRANSFER
+                            ) {
+                                transferViewFor(m, liveTransfers, { retrySources[it] == true }, ::modelStanding)
+                            } else {
+                                null
+                            },
+                        call = if (m.kind == MessageEntity.KIND_CALL) CallRecord.decode(m.body) else null,
+                    )
+                }
+            // Autocomplete candidates: everyone we've received a message from, plus a group's roster (so
+            // @-mentions work in a fresh group before anyone has spoken), resolved to a display name.
+            val candidates =
+                (bundle.senders + members)
+                    .asSequence()
+                    .filter { it != me && it !in blocked }
+                    .distinct()
+                    .map { id ->
+                        val resolved = label(id)
+                        MentionCandidate(
+                            nodeId = id,
+                            displayName = resolved.text,
+                            avatarHash = peersByNode[id]?.avatarHash,
+                            alias = resolved.alias,
+                            discriminator = resolved.discriminator,
+                        )
+                    }.sortedBy { it.displayName.lowercase() }
+                    .toList()
+            // The header's cluster: the roster minus us, by node id. Up to four directory lookups, so the
+            // memoised label() above is not worth threading through.
+            val faces = if (isGroup) groupFaces(members, me, directory) else emptyList()
+            // Peers typing in THIS thread, resolved for the indicator row. Skip ourselves (defensive — our
+            // own cue never lands here) and blocked senders (as their messages are already filtered out).
+            val typingPeers =
+                typingMap[conversationId]
+                    .orEmpty()
+                    .asSequence()
+                    .filter { it != me && it !in blocked }
+                    .map { id -> TypingPeer(id, label(id).text, peersByNode[id]?.avatarHash) }
+                    .sortedBy { it.name.lowercase() }
+                    .toList()
+            ChatUiState(
+                rows = rows,
+                hasOlder = bundle.hasOlder,
+                neighborCount = count,
+                transportHealth = health,
+                myNodeId = me.orEmpty(),
+                mentionCandidates = candidates,
+                everyoneMentions = if (isGroup) everyoneMentions(members, me, blocked) else null,
+                isRoom = isRoom,
+                memberTitle =
+                    group
+                        ?.let {
+                            groupTitle(
+                                storedName = "",
+                                memberIds = members,
+                                selfId = me,
+                                fallback = context.getString(R.string.group_unnamed),
+                            ) { id -> label(id).text }
+                        }.orEmpty(),
+                title =
+                    when {
+                        group != null -> {
+                            groupTitle(
+                                storedName = group.name,
+                                memberIds = members,
+                                selfId = me,
+                                fallback = context.getString(R.string.group_unnamed),
+                            ) { id -> label(id).text }
+                        }
+
+                        isRoom -> {
+                            context.getString(R.string.nearby_title)
+                        }
+
+                        // The live board's primary channel (`LongFast`, `MediumFast`, or a name the user
+                        // gave it), else the newest post's, else the generic label — one rule with the
+                        // chat list (`meshRoomChannel`), so the two agree.
+                        isBridged -> {
+                            meshRoomChannel(mesh.lora.facts.primaryChannel, newestOriginChannel(msgs))
+                                ?: context.getString(R.string.meshtastic_title)
+                        }
+
+                        // The relay's advertised name, one rule with the chat list (`conversationTitle`).
+                        isCommons -> {
+                            publicId.commonsRoom?.name?.takeIf { it.isNotBlank() } ?: context.getString(R.string.commons_title)
+                        }
+
+                        else -> {
+                            label(conversationId).text
+                        }
+                    },
+                titleDiscriminator = if (isPeerThread) label(conversationId).discriminator else null,
+                // A room uses a glyph; a group shows its photo (or the glyph when unset); a DM the peer avatar.
+                avatarHash =
+                    when {
+                        isRoom || isBridged || isCommons -> null
+                        else -> group?.photoShownHash ?: peersByNode[conversationId]?.avatarHash
+                    },
+                canSendFile = !isRoom && !isBridged && !(isCommons && conversationId in relay.textOnlyRooms),
+                isBridged = isBridged,
+                isCommons = isCommons,
+                commonsTextOnly = isCommons && conversationId in relay.textOnlyRooms,
+                commonsStale = isCommons && conversationId in relay.staleRooms,
+                // The board's slot-0 signature cliff where it signs (so every post leaves signed), else the 200-byte
+                // client convention.
+                publicPostBudget = if (isBridged) PublicPostPolicy.onAirBudget(mesh.lora.facts.roomSignedUpTo) else null,
+                publicChannelKeyIsPublic = mesh.lora.facts.primaryKeyIsPublic,
+                needsPublicConsent = isBridged && !publicConsented,
+                isBlocked = isPeerThread && conversationId in blocked,
+                canCall = calls?.liveEnabled == true && callable && offers(Protocol.CAP_CALL),
+                canMeshCall = calls?.walkieEnabled == true && callable && offers(Protocol.CAP_WALKIE),
+                verified = isPeerThread && peersByNode[conversationId]?.verified == true,
+                isGroup = isGroup,
+                memberCount = members.size,
+                groupFaces = faces,
+                typingPeers = typingPeers,
+                relayReach =
+                    noticeFor(
+                        conversationId,
+                        relay,
+                        mesh.relay.roomNoticeDismissed,
+                        peerLacksForwardSecrecy = peerLacksFs,
+                    ),
+                relayPlane = planeFor(relay),
+                relayDirectLinkNote = isPeerThread && publicId.directLinksOn && peerCaps and Protocol.CAP_INET_LINK != 0L,
+                loraPlane = mesh.lora.facts.plane,
+                loraReach =
+                    when (val audience = mesh.lora.audience) {
+                        is LoraAudience.Room -> {
+                            loraRoomReachFor(mesh.lora.facts, audience.loraOnly)
+                        }
+
+                        is LoraAudience.Group -> {
+                            loraGroupReachFor(
+                                mesh.lora.facts,
+                                // The roster, never the whole directory: a LoRa-only stranger is not in
+                                // this group, and our own id is not somebody we fail to deliver to.
+                                loraOnlyMember = members.any { it != me && it in audience.loraOnly },
+                                relayReach = reachFor(conversationId, relay),
+                            )
+                        }
+
+                        is LoraAudience.Peer -> {
+                            loraReachFor(
+                                conversationId,
+                                mesh.lora.facts,
+                                audience.kinds,
+                                reachFor(conversationId, relay),
+                            )
+                        }
+
+                        // A post here leaves through this phone's own board, and a spent window is answered
+                        // per send; what the room says about itself is a static strip, not a reach state.
+                        LoraAudience.Bridged -> {
+                            LoraReach.Silent
+                        }
+                    },
+                loraCarry = loraCarryFor(conversationId, isGroup, mesh.lora.facts),
+                publicPostGate = publicPostGateFor(conversationId, mesh.lora.facts),
+            )
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChatUiState(isRoom = isRoom, isLoading = true))
+
+    /** The render shape of a heard post's attribution — the row's `origin*` columns, the `!hex` id derived. */
+    private fun meshOriginFor(
+        m: MessageEntity,
+        node: Long,
+    ) = MeshOrigin(
+        nodeLabel = meshNodeLabel(node),
+        name = m.originName?.takeIf { it.isNotBlank() },
+        peerId = m.originPeerId,
+        hops = m.originHops,
+        snrDeci = m.originSnrDeci,
+        viaMqtt = m.originViaMqtt,
+        signed = MeshSignature.fromRow(m.originSigned),
+    )
+
+    /**
+     * This thread's pinned messages, newest pin first — the bar under the title (#42). A pin on a blocked sender's
+     * message is left out, as their bubbles are (blocking also unpins it, [block]); the author is named by the thread's
+     * own rule ([senderName]), with "You" for this phone.
+     */
+    val pinned: StateFlow<List<PinnedView>> =
+        combine(
+            pins?.observePinnedIn(conversationId) ?: flowOf(emptyList()),
+            peerDirectory,
+            myNodeId,
+            settings.blockedNodeIds,
+            settings.contentFilteringEnabled,
+        ) { rows, directory, me, blocked, hideFlagged ->
+            val selfLabel = context.getString(R.string.chat_self_name)
+            rows
+                .filter { it.message.senderId !in blocked }
+                .map { pin ->
+                    val m = pin.message
+                    val origin = m.originNode?.let { node -> meshOriginFor(m, node) }
+                    PinnedView(
+                        messageId = m.id,
+                        author = senderName(origin, m.senderId, me, selfName = selfLabel) { directory.label(it).text },
+                        preview = messagePreview(context, m, hideFlagged),
+                    )
+                }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The long-press quick-reaction row: the [RecentReactions.SHOWN] most recent picks, newest first. */
+    val recentReactions: StateFlow<List<String>> =
+        settings.recentReactions
+            .map { it.take(RecentReactions.SHOWN) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), RecentReactions.DEFAULTS)
+
+    /**
+     * Reach for the image staged in the composer, so the user learns a photo is nearby-only *before*
+     * sending rather than after. Its own flow rather than a [ChatUiState] field: the staged attachment is
+     * not part of the main combine (which is already at the typed five-flow limit), and the composer is
+     * the only consumer.
+     *
+     * The size comes from the blob table, not from [AttachmentStore.Ingested] — ingestion has already
+     * stored the bytes by the time an image is staged, so the row is there to be read, through the same
+     * [heldSizes] the rows use ([heldHashes] folds the staged hash in).
+     */
+    val stagedAttachmentRelay: StateFlow<AttachmentRelay> =
+        combine(
+            _pendingAttachment,
+            heldSizes.filterNotNull(),
+            relayFacts,
+        ) { staged, sizes, relay ->
+            if (staged?.link != null) return@combine AttachmentRelay.Silent // a card's reach is never a marker
+            val bytes = staged?.hash?.let { sizes[it] } ?: return@combine AttachmentRelay.Silent
+            attachmentReach(conversationId, bytes, relay)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AttachmentRelay.Silent)
+
+    /**
+     * The free-tickets notice for this thread (C-7.6-34), or null. Free tickets are on by default, so the notice informs
+     * rather than asks: it shows once something sent here is held back for want of a files ticket — the staged
+     * attachment, or one of ours already in the thread, reads [AttachmentRelay.Locked] — on a relay whose notice the
+     * person has not acknowledged, and stays up once the free key is held (the upload then goes through, and the notice
+     * must not vanish unread). OK or Turn off removes the offer, so it shows once.
+     */
+    val freeUploadOffer: StateFlow<FreeUploadOffer?> =
+        if (freeUploads == null) {
+            MutableStateFlow(null)
+        } else {
+            combine(freeUploads.offers, stagedAttachmentRelay, state) { offers, staged, ui ->
+                val held = staged == AttachmentRelay.Locked || ui.rows.any { it.attachmentRelay == AttachmentRelay.Locked }
+                offers.firstOrNull { it.freeKeyHeld || held }
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+        }
+
+    /**
+     * The most a photo staged here may be to go up through this conversation's relays under their tickets' `am`
+     * (C-7.6-32), or null to leave it as it is: the broadcast room and the Meshtastic room never ride a relay, and a
+     * build without tickets holds none.
+     */
+    private suspend fun photoFit(): Int? {
+        if (isRoom || isBridged) return null
+        return freeUploads?.photoChunks?.first()?.let(::photoFitBytes)
+    }
+
+    /**
+     * The person's answer to [offer]'s notice — true for OK, false for Turn off. Written past the screen's life: a Back
+     * must not lose it.
+     */
+    fun answerFreeUploads(
+        offer: FreeUploadOffer,
+        allowed: Boolean,
+    ) {
+        val uploads = freeUploads ?: return
+        viewModelScope.launch { withContext(NonCancellable) { uploads.answer(offer.relayHost, allowed) } }
+    }
+
+    /**
+     * The card for [m] when it carries one that has been decoded ([cards]) **and** whose link the body
+     * actually contains — a sender cannot attach one page's card to another page's link. The compare is on
+     * normalized links, so a typed `http://` and the card's `https://` form still match.
+     */
+    private fun linkCardFor(
+        m: MessageEntity,
+        cards: Map<String, LinkCard>,
+    ): LinkCard? {
+        if (m.attachmentMime != LinkPreviewBlob.MIME) return null
+        val card = m.attachmentHash?.let { cards[it] } ?: return null
+        return card.takeIf { c -> findUrls(m.body).any { LinkPreviewPolicy.sameUrl(it.url, c.url) } }
+    }
+
+    /**
+     * The composer's translation of the person's own draft (ADR 2026-10.t2h6's amendment): running, done (for the screen
+     * to put in the field, once), or what it needs first — the draft's language, or a model.
+     */
+    sealed interface DraftTranslation {
+        data object Running : DraftTranslation
+
+        /**
+         * For the screen to put in the field, then [onDraftTranslationApplied]; [original] is what Undo restores, and
+         * [guessed] says [from] was what this person usually writes here, not what the words read.
+         */
+        data class Done(
+            val original: String,
+            val text: String,
+            val from: TranslateLang,
+            val guessed: Boolean = false,
+            val to: TranslateLang? = null,
+        ) : DraftTranslation
+
+        /** The identifier could not tell which language the draft is in, or guessed wrong: the person is asked. */
+        data class AskFrom(
+            val draft: String,
+            val mentions: List<IntRange>,
+            val choices: List<TranslateLang>,
+        ) : DraftTranslation
+
+        /** The draft, in [from], could go into more than one language and the chat does not say which: asked too. */
+        data class AskTo(
+            val draft: String,
+            val mentions: List<IntRange>,
+            val from: TranslateLang,
+            val guessed: Boolean,
+            val choices: List<TranslateLang>,
+        ) : DraftTranslation
+
+        data class NeedsModel(
+            val direction: TranslateDirection,
+        ) : DraftTranslation
+
+        data class Failed(
+            val unusable: Boolean,
+        ) : DraftTranslation
+    }
+
+    private val _draftTranslation = MutableStateFlow<DraftTranslation?>(null)
+
+    /** Where translating the draft stands; null when nothing was asked or its result was taken. */
+    val draftTranslation: StateFlow<DraftTranslation?> = _draftTranslation.asStateFlow()
+
+    /**
+     * The chat's own language (ADR 2026-10.t2h6), read by the words alone from other people's newest messages: the
+     * composer's hint compares the draft with it, and a short message the words and its author cannot settle takes it.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val threadLanguage: StateFlow<TranslateLang?> =
+        translation
+            ?.let { t ->
+                state
+                    .map { s -> s.rows.filter { !it.mine && it.body.isNotBlank() }.takeLast(ComposePolicy.THREAD_SAMPLE) }
+                    .distinctUntilChangedBy { rows -> rows.map { it.id } }
+                    .combine(translationOn) { rows, on -> rows.takeIf { on } }
+                    // Off in Settings, nothing is read: no identifier runs for a chat that offers no translation.
+                    .mapLatest { rows -> rows?.let { r -> ComposePolicy.threadLanguage(r.map { t.pick(it.body, mentionRanges(it)) }) } }
+                    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+            } ?: MutableStateFlow(null)
+
+    /**
+     * What the chat's other people read by their own declarations on the frame (ADR 2026-10.t2h6's 2026-10-29
+     * amendment), with the peer's name in a one-to-one chat; null when they do not say.
+     */
+    private val declaredReaders: StateFlow<DeclaredReaders?> =
+        translation
+            ?.let {
+                state
+                    .map { s ->
+                        val others =
+                            s.rows
+                                .filter { !it.mine && it.body.isNotBlank() }
+                                .takeLast(ComposePolicy.THREAD_SAMPLE)
+                                .asReversed()
+                        val oneToOne = !s.isRoom && !s.isGroup && others.distinctBy { it.senderNodeId }.size == 1
+                        val declared = others.map { ComposePolicy.Declared(it.senderNodeId, it.bodyLang, it.authorReads) }
+                        ComposePolicy.declaredReaders(declared, oneToOne)?.let { lang ->
+                            DeclaredReaders(lang, others.firstOrNull()?.senderPlainName?.takeIf { oneToOne })
+                        }
+                    }.distinctUntilChanged()
+                    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+            } ?: MutableStateFlow(null)
+
+    /** The language a draft goes into here: what the chat's people declared reading, else what they write. */
+    private fun chatReads(): TranslateLang? = declaredReaders.value?.lang ?: threadLanguage.value
+
+    /**
+     * The composer's suggestion (ADR 2026-10.t2h6's amendment): the direction from the draft's language into the one
+     * the chat reads — what its people declared, else what they write — when the draft is confidently in another. Null
+     * where translation is not wired, the draft is too short to read, or the two agree.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
+    val draftHint: StateFlow<DraftHint?> =
+        translation
+            ?.let { t ->
+                val draftLanguage =
+                    draft
+                        .debounce(DRAFT_READ_MS)
+                        .mapLatest { text ->
+                            if (translationOn.value && ComposePolicy.readable(text)) t.pick(text, emptyList()) else LanguagePick.Unsure
+                        }
+                combine(draftLanguage, threadLanguage, declaredReaders, translationOn) { pick, thread, declared, on ->
+                    ComposePolicy.suggest(pick, declared?.lang ?: thread)?.takeIf { on }?.let { direction ->
+                        DraftHint(direction, declared = declared != null, by = declared?.name)
+                    }
+                }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+            } ?: MutableStateFlow(null)
+
+    /**
+     * Translates [draft] (with the mentions at [mentions]) from [from] or, without it, from what the identifier reads,
+     * into [to] or, without it, the chat's language ([TranslateTarget.forDraft]). The result lands in [draftTranslation]
+     * for the screen to put in the field; the person reads it there, and may edit it, before sending. [fromGuessed] when
+     * a given [from] was itself a prior's guess (the person picked only the target), so "Not English?" stays offered.
+     */
+    fun translateDraft(
+        draft: String,
+        mentions: List<IntRange>,
+        from: TranslateLang? = null,
+        to: TranslateLang? = null,
+        fromGuessed: Boolean = false,
+    ) {
+        val t = translation ?: return
+        if (draft.isBlank() || _draftTranslation.value == DraftTranslation.Running) return
+        _draftTranslation.value = DraftTranslation.Running
+        viewModelScope.launch {
+            // A draft is the person's own: when its words cannot tell, what they write in this chat does.
+            val resolution = if (from == null) t.resolve(draft, mentions, conversationId, myNodeId.value, null, null) else null
+            val lang =
+                from ?: when (val pick = resolution?.pick) {
+                    is LanguagePick.Picked -> {
+                        pick.lang
+                    }
+
+                    else -> {
+                        val choices = draftSources(resolution, exclude = null)
+                        _draftTranslation.value = DraftTranslation.AskFrom(draft, mentions, choices)
+                        return@launch
+                    }
+                }
+            val guessed = resolution?.guessed ?: fromGuessed
+            val target = to ?: TranslateTarget.forDraft(lang, chatReads())
+            _draftTranslation.value =
+                if (target == null) {
+                    askDraftTarget(draft, mentions, lang, guessed)
+                } else {
+                    draftOutcome(draft, guessed, t.translateDraft(draft, lang, target, mentions))
+                }
+        }
+    }
+
+    // The draft could go into more than one language and the chat says nothing of which: the person picks.
+    private fun askDraftTarget(
+        draft: String,
+        mentions: List<IntRange>,
+        from: TranslateLang,
+        guessed: Boolean,
+    ): DraftTranslation {
+        val choices = TranslateTarget.draftChoices(from).sortedBy { LanguageNames.name(it, Locale.getDefault()) }
+        return if (choices.isEmpty()) {
+            DraftTranslation.Failed(
+                unusable = false,
+            )
+        } else {
+            DraftTranslation.AskTo(draft, mentions, from, guessed, choices)
+        }
+    }
+
+    private fun draftOutcome(
+        draft: String,
+        guessed: Boolean,
+        outcome: TranslateOutcome,
+    ): DraftTranslation =
+        when (outcome) {
+            is TranslateOutcome.Text -> DraftTranslation.Done(draft, outcome.text, outcome.from, guessed, outcome.to)
+            is TranslateOutcome.NeedsModel -> DraftTranslation.NeedsModel(outcome.direction)
+            is TranslateOutcome.Failed -> DraftTranslation.Failed(outcome.reason == MessageTranslation.Failed.Reason.UNUSABLE)
+        }
+
+    /** The draft's translation guessed [wrong] for the original's language: one left translates at once, more ask. */
+    fun draftNotThisLanguage(
+        original: String,
+        mentions: List<IntRange>,
+        wrong: TranslateLang,
+    ) {
+        val left = draftSources(null, exclude = wrong)
+        left.singleOrNull()?.let { translateDraft(original, mentions, it) }
+            ?: run { _draftTranslation.value = DraftTranslation.AskFrom(original, mentions, left) }
+    }
+
+    // Every language a draft can be read as, the identifier's own reads first.
+    private fun draftSources(
+        resolution: Resolution?,
+        exclude: TranslateLang?,
+    ): List<TranslateLang> {
+        val locale = Locale.getDefault()
+        return LanguageChoices.order(resolution?.ranked.orEmpty(), TranslateDirection.sources, { LanguageNames.name(it, locale) }, exclude)
+    }
+
+    /** The screen put the translation in the field. */
+    fun onDraftTranslationApplied() {
+        _draftTranslation.update { if (it is DraftTranslation.Done) null else it }
+    }
+
+    /** The person closed the language question or the download offer. */
+    fun dismissDraftTranslation() {
+        _draftTranslation.value = null
+    }
+
+    /** Starts [direction]'s download from the composer; the person translates again once it is in. */
+    fun downloadDraftModel(direction: TranslateDirection) {
+        _draftTranslation.value = null
+        translation?.download(direction)
+    }
+
+    /** The screen reports every edit of the draft here, text and formatting; a blank draft resets the per-draft memory. */
+    fun onDraftChanged(report: Draft) {
+        val text = report.text
+        draft.value = text
+        // A failure says nothing about the next edit.
+        if (_draftTranslation.value is DraftTranslation.Failed) _draftTranslation.value = null
+        if (text.isBlank()) {
+            dismissedUrl = null
+            failedUrls.clear()
+        }
+        // Keep it for next time (debounced, on the application scope). Blank text drops the row, so emptying
+        // the field is how a draft is thrown away deliberately. Text the row already holds is not an edit —
+        // see [persisted] for the two ways it comes back. Formatting alone changing is an edit (ADR 2026-09.qtg9).
+        val held = persisted ?: return
+        if (report == held) return
+        persisted = report
+        drafts.save(conversationId, report)
+    }
+
+    /**
+     * Hands the screen the text this thread was left with, once, and returns empty on every later call — a
+     * rotation re-runs the screen's restore effect, and a draft the user has since cleared must not come
+     * back with it. Taking it is also what starts persisting edits: see [onDraftChanged].
+     */
+    suspend fun consumeRestoredDraft(): Draft {
+        if (persisted != null) return Draft.EMPTY
+        val stored = storedDraft.await()
+        persisted = stored
+        restored = stored.text.ifEmpty { null }
+        return stored
+    }
+
+    /**
+     * Whether every recipient of this thread can render a card, or null when the room is the audience: a DM or
+     * group message carries a card only toward pinned profiles carrying [Protocol.CAP_LINK_PREVIEW], since a
+     * build without it shows a spinner where the card should be. Silent, unlike [refusalForFile] — an implicit
+     * action has no affordance to explain itself through, and the message goes as plain text either way.
+     */
+    private suspend fun audienceCannotRenderCards(): Boolean {
+        if (isRoom) return false
+        val members = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        val me = identity.nodeId()
+        val audience = if (members.isEmpty()) listOf(conversationId) else members.filter { it != me }
+        return audience.isEmpty() || audience.any { (peers.find(it)?.capabilities ?: 0L) and Protocol.CAP_LINK_PREVIEW == 0L }
+    }
+
+    /**
+     * The composer's link-preview loop: the first eligible link in the draft, debounced, becomes a staged card
+     * when every gate agrees — the setting is on, a validated route exists, nothing else is staged, the link
+     * was not dismissed or found empty in this draft, and the audience can render one. `collectLatest` cancels a
+     * fetch the moment the link or the epoch changes, so a card can only ever land on the draft it was
+     * fetched for.
+     */
+    @OptIn(FlowPreview::class)
+    private fun watchDraftForLinks() {
+        viewModelScope.launch {
+            combine(
+                draft.map(LinkPreviewPolicy::firstEligible),
+                draftEpoch,
+                linkPreviews.online,
+                // Whether the one attachment slot is free: clearing a staged photo re-arms the link under it.
+                _pendingAttachment.map { it == null },
+            ) { url, epoch, online, free -> DraftKey(url, epoch, online, free) }
+                .distinctUntilChanged()
+                .debounce(PREVIEW_DEBOUNCE_MS)
+                .collectLatest { key -> considerCard(key.url, key.online) }
+        }
+    }
+
+    /** Everything the link loop reacts to; a change in any field re-runs [considerCard] after the debounce. */
+    private data class DraftKey(
+        val url: String?,
+        val epoch: Int,
+        val online: Boolean,
+        val free: Boolean,
+    )
+
+    private suspend fun considerCard(
+        url: String?,
+        online: Boolean,
+    ) {
+        val staged = _pendingAttachment.value
+        if (url == null) {
+            if (staged?.link != null) clearAttachment()
+            return
+        }
+        if (!cardWanted(url, staged, online)) return
+        stageCard(url)
+    }
+
+    /**
+     * What [send] attaches: whatever is staged, else the card for the draft's first link when the composer
+     * would fetch one — waited for, up to [SEND_CARD_HOLD_MS]. A link handed in from the share sheet arrives
+     * whole, and Send is the next tap, well inside the debounce and the fetch (the page, the picture, and on a
+     * cold start the classifier's model load); without the hold a shared link never carried its card. The send
+     * button's spinner covers the wait, and past the bound the text goes alone as it always did. Joins a fetch
+     * the loop already has in flight rather than starting a second; [cardWanted] keeps the loop out of one
+     * started here.
+     */
+    private suspend fun attachmentForSend(body: String): AttachmentStore.Ingested? {
+        _pendingAttachment.value?.let { return it }
+        val url = LinkPreviewPolicy.firstEligible(body) ?: return null
+        withTimeoutOrNull(SEND_CARD_HOLD_MS) {
+            if (_linkPreviewLoading.value) {
+                _linkPreviewLoading.first { !it }
+            } else if (cardWanted(url, staged = null, online = linkPreviews.online.value)) {
+                stageCard(url)
+            }
+        }
+        return _pendingAttachment.value
+    }
+
+    /** Every gate a fetch for [url] has to pass, cheapest first; the audience read comes last because it hits the DB. */
+    private suspend fun cardWanted(
+        url: String,
+        staged: AttachmentStore.Ingested?,
+        online: Boolean,
+    ): Boolean =
+        staged == null &&
+            !_linkPreviewLoading.value &&
+            url != dismissedUrl &&
+            url !in failedUrls &&
+            online &&
+            settings.linkPreviewsEnabled.first() &&
+            // A card is an attachment, and the bridged room takes none — see [stage]. Read from the id rather
+            // than from `loraCarry`, which is None here precisely because the room's length rule is its own.
+            // Nor does a commons whose relay takes none. A thread that rides LoRa takes a card exactly as
+            // it takes a photo (ADR 2026-09.7x8k): the frame carries its reference under the same body reserve
+            // and a board-only reader sees the bare link, which is what the bubble draws for a card it lacks.
+            !isBridged &&
+            !state.value.commonsTextOnly &&
+            !audienceCannotRenderCards()
+
+    /** One fetch for [url], flagged for the composer's "Loading preview…" line while it runs; stages what it yields. */
+    private suspend fun stageCard(url: String) {
+        _linkPreviewLoading.value = true
+        try {
+            when (val result = linkPreviews.fetchCard(url, isRoom)) {
+                is LinkPreviewService.CardResult.Card -> {
+                    // Re-check: a photo may have been staged, or the draft edited or sent, while the fetch ran.
+                    if (_pendingAttachment.value == null && LinkPreviewPolicy.firstEligible(draft.value) == url) {
+                        stage(attachments.ingestLinkPreview(result.blob), notifyFailure = false)
+                    }
+                }
+
+                LinkPreviewService.CardResult.NoCard -> {
+                    failedUrls += url
+                }
+
+                LinkPreviewService.CardResult.Offline, LinkPreviewService.CardResult.Restricted -> {
+                    // Not an answer about the link: retried when the route returns.
+                }
+            }
+        } finally {
+            _linkPreviewLoading.value = false
+        }
+    }
+
+    /**
+     * Double-submit guard: true from the moment a send is accepted until its input is cleared (success)
+     * or it's rejected (blocked). [send] is a suspending round-trip (seal-to-recipients + DB write +
+     * enqueue), and the input isn't cleared until it returns, so without this a rapid burst of taps on
+     * the always-enabled send button would each read the same still-present draft and flood duplicates.
+     * Main-thread-confined: touched only from [send] and [onInputCleared], both on the main dispatcher.
+     *
+     * Exposed as [isSending] so the chat screen can show a "working…" spinner in the send button while a
+     * send is in flight — on a cold start the first send blocks on the one-time toxicity-model load
+     * (~16 MB TFLite + tokenizer + Interpreter), which otherwise looks like a frozen app. Backing the
+     * guard and the UI signal with the same value keeps them from ever diverging.
+     */
+    private val _isSending = MutableStateFlow(false)
+    val isSending: StateFlow<Boolean> = _isSending.asStateFlow()
+
+    private val _showPublicConsent = MutableStateFlow(false)
+
+    /** Whether the bridged room's first-use disclosure is on screen. See [acceptPublicConsent]. */
+    val showPublicConsent: StateFlow<Boolean> = _showPublicConsent.asStateFlow()
+
+    /**
+     * A post to the Meshtastic room, which leaves through this phone's own board and nowhere else.
+     *
+     * The gate comes first — asking for the disclosure with no radio to post through would be a question
+     * about nothing — then the first-use disclosure (raised here rather than on opening the room, because a
+     * person who only ever reads it should never be asked to decide anything; the draft is kept, so accepting
+     * sends what they already wrote), then the board. Every refusal keeps the draft and says why, so a post
+     * never silently goes nowhere — the failure the whole room is designed around.
+     */
+    private fun postPublic(text: String) {
+        if (state.value.publicPostGate != PublicPostGate.Open) {
+            _events.tryEmit(R.string.chat_mesh_post_not_connected)
+            return
+        }
+        if (state.value.needsPublicConsent) {
+            _showPublicConsent.value = true
+            return
+        }
+        if (_isSending.value) return
+        _isSending.value = true
+        viewModelScope.launch {
+            var accepted = false
+            try {
+                when (val outcome = meshManager.sendPublicPost(text)) {
+                    PublicPostOutcome.Queued -> {
+                        accepted = true
+                        // The same clean slate an accepted chat send leaves: nothing is ever staged here,
+                        // but a card fetch still in flight for this draft must not stage into the next.
+                        _pendingAttachment.value = null
+                        dismissedUrl = null
+                        failedUrls.clear()
+                        draftEpoch.value++
+                        // The post is away; what is about to be cleared from the field is not a draft any more.
+                        drafts.clear(conversationId)
+                        if (persisted != null) persisted = Draft.EMPTY
+                        _clearInput.tryEmit(Unit)
+                    }
+
+                    PublicPostOutcome.Blocked -> {
+                        _events.tryEmit(R.string.moderation_text_blocked)
+                    }
+
+                    is PublicPostOutcome.Refused -> {
+                        _events.tryEmit(refusalMessage(outcome.reason))
+                    }
+                }
+            } finally {
+                if (!accepted) _isSending.value = false
+            }
+        }
+    }
+
+    /** What the composer says for a board's refusal — exhaustive, so a new reason cannot go unsaid. */
+    private fun refusalMessage(reason: PublicPostRefusal): Int =
+        when (reason) {
+            PublicPostRefusal.NO_BOARD, PublicPostRefusal.NOT_READY -> R.string.chat_mesh_post_not_connected
+
+            PublicPostRefusal.KNIT_ON_PRIMARY -> R.string.chat_mesh_post_channel_unusable
+
+            PublicPostRefusal.TOO_SOON -> R.string.chat_mesh_post_too_soon
+
+            PublicPostRefusal.TOO_LARGE -> R.string.chat_mesh_post_too_large
+
+            PublicPostRefusal.NO_AIR -> R.string.chat_mesh_post_no_air
+
+            PublicPostRefusal.NAK -> R.string.chat_mesh_post_refused
+
+            // Only reachable on a screen that outlived its own row (the switch flipped while the thread was
+            // open); the row and its composer both go with the setting.
+            PublicPostRefusal.ROOM_OFF -> R.string.chat_mesh_post_room_off
+
+            PublicPostRefusal.DEDICATED -> R.string.chat_mesh_post_dedicated
+        }
+
+    /**
+     * Records the disclosure as accepted and lowers it. Deliberately does **not** send: the user pressed a
+     * button that said "Post" on a sheet, not on their message, and making one tap do both would mean the
+     * words went out in the same motion as the decision to allow them to.
+     */
+    fun acceptPublicConsent() {
+        viewModelScope.launch {
+            settings.acceptMeshtasticPostConsent()
+            _showPublicConsent.value = false
+        }
+    }
+
+    /** Lowers the disclosure without recording anything, so the next attempt asks again. */
+    fun dismissPublicConsent() {
+        _showPublicConsent.value = false
+    }
+
+    // ---- Location sharing: the composer's pin ----
+
+    /**
+     * What the composer holds while a position is staged. [fix] is the best reading so far, null while the
+     * first is still sought; [status] is the tile's state; [precision] says whether the grant is fine or only
+     * approximate, so the tile can say a two-kilometre radius is by design rather than bad luck.
+     */
+    data class StagedLocation(
+        val fix: LocationFix?,
+        val status: Status,
+        val precision: LocationPrecision,
+    ) {
+        enum class Status {
+            /** Listening, nothing yet — the one state with a spinner, and the window bounds it. */
+            Acquiring,
+
+            /** Listening, with a reading the tile shows and keeps tightening. */
+            Refining,
+
+            /** The window closed, or the reading was good enough: the source is off and what is shown is what goes. */
+            Ready,
+
+            /** The window closed with no reading at all — indoors, no provider — and the tile offers a retry. */
+            Failed,
+
+            /** The system location toggle is off; nothing can answer until the user turns it on. */
+            ServicesOff,
+        }
+
+        /** The body token this position rides as, or null while there is none. */
+        val token: String? get() = fix?.let { GeoUri.format(it.toPoint()) }
+    }
+
+    private val _stagedLocation = MutableStateFlow<StagedLocation?>(null)
+
+    /** The position staged in the composer, or null. Its own flow, like [stagedAttachmentRelay]: the composer is the one reader. */
+    val stagedLocation: StateFlow<StagedLocation?> = _stagedLocation.asStateFlow()
+
+    private val _showLocationConsent = MutableStateFlow(false)
+
+    /** Whether the pin's first-use disclosure is on screen. See [attachLocation]. */
+    val showLocationConsent: StateFlow<Boolean> = _showLocationConsent.asStateFlow()
+
+    /**
+     * Fires once the disclosure stands accepted and a position may be sought. The screen answers it by
+     * clearing the runtime permission — a composable's job — and then calling [startLocation]. One-shot, like
+     * [events], so a screen that is not there to hear it asks nothing.
+     */
+    private val _locationPermissionNeeded = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val locationPermissionNeeded: SharedFlow<Unit> = _locationPermissionNeeded.asSharedFlow()
+
+    private var locationJob: Job? = null
+
+    /** True when the screen leaving cut a window short, so coming back re-arms it. */
+    private var locationPaused = false
+
+    /**
+     * The pin was tapped. The bridged room refuses (its channel carries one line of text); the first use
+     * reads the disclosure; after that the screen is asked to clear the grant and start.
+     */
+    fun attachLocation() {
+        if (isBridged) {
+            _events.tryEmit(R.string.chat_mesh_text_only)
+            return
+        }
+        viewModelScope.launch {
+            if (settings.locationShareConsented.first()) {
+                _locationPermissionNeeded.tryEmit(Unit)
+            } else {
+                _showLocationConsent.value = true
+            }
+        }
+    }
+
+    /**
+     * Records the disclosure as accepted, lowers it and carries on to the grant. One tap does both here,
+     * unlike [acceptPublicConsent]: the sheet's button says what the pin said, and nothing leaves the phone
+     * until the send that follows.
+     */
+    fun acceptLocationConsent() {
+        viewModelScope.launch {
+            settings.acceptLocationShareConsent()
+            _showLocationConsent.value = false
+            _locationPermissionNeeded.tryEmit(Unit)
+        }
+    }
+
+    /** Lowers the disclosure without recording anything, so the next tap asks again. */
+    fun dismissLocationConsent() {
+        _showLocationConsent.value = false
+    }
+
+    /**
+     * The grant is held: seed the tile from the platform's cached reading, then listen for at most
+     * [LocationFixPolicy.REFINE_WINDOW_MS] or until a reading is good enough, and freeze. **This is the only
+     * place in the app that collects [LocationSource.fixes]** — the invariant "Knit reads your position only
+     * when you ask it to" rests on, so a second collector anywhere is a bug.
+     */
+    fun startLocation() {
+        locationJob?.cancel()
+        locationPaused = false
+        val precision = locationSource.precision()
+        if (precision == LocationPrecision.None) {
+            _events.tryEmit(R.string.chat_location_denied)
+            return
+        }
+        if (!locationSource.isEnabled()) {
+            _stagedLocation.value = StagedLocation(fix = null, status = StagedLocation.Status.ServicesOff, precision = precision)
+            return
+        }
+        _stagedLocation.value = StagedLocation(fix = null, status = StagedLocation.Status.Acquiring, precision = precision)
+        locationJob =
+            viewModelScope.launch {
+                locationSource.lastKnown()?.let { seed ->
+                    _stagedLocation.value = StagedLocation(seed, StagedLocation.Status.Refining, precision)
+                }
+                withTimeoutOrNull(LocationFixPolicy.REFINE_WINDOW_MS) {
+                    locationSource
+                        .fixes()
+                        .map { fix -> LocationFixPolicy.better(_stagedLocation.value?.fix, fix) }
+                        .onEach { best -> _stagedLocation.value = StagedLocation(best, StagedLocation.Status.Refining, precision) }
+                        .firstOrNull { LocationFixPolicy.isGoodEnough(it) }
+                }
+                freezeLocation()
+            }
+    }
+
+    /** Listens again: the tile's retry after a failure, and its refresh once a frozen reading has aged. */
+    fun refreshLocation() {
+        if (_stagedLocation.value != null) startLocation()
+    }
+
+    /** Drops the staged position and stops listening. */
+    fun clearLocation() {
+        locationJob?.cancel()
+        locationJob = null
+        locationPaused = false
+        _stagedLocation.value = null
+    }
+
+    /** The chat left the screen: a tile still listening freezes, so a backgrounded chat never keeps the radio on. */
+    private fun pauseLocation() {
+        val job = locationJob?.takeIf { it.isActive } ?: return
+        job.cancel()
+        locationJob = null
+        locationPaused = true
+        freezeLocation()
+    }
+
+    /** Back on screen with a tile the pause froze: a fresh window, since the phone may well have moved. */
+    private fun resumeLocation() {
+        if (locationPaused && _stagedLocation.value != null) startLocation()
+    }
+
+    private fun freezeLocation() {
+        _stagedLocation.update { staged ->
+            staged?.copy(status = if (staged.fix != null) StagedLocation.Status.Ready else StagedLocation.Status.Failed)
+        }
+    }
+
+    /**
+     * [text] with the staged position folded in, or null when the send must wait: a position still being
+     * sought is not sent as nothing — the tile is visibly looking, the send says so, and the draft stays the
+     * user's, the rule every refusal here follows.
+     *
+     * The token goes on its own last line, the text cut first so the token always fits under
+     * [TextLimits.MESSAGE]: the receiver clamps the body there (`InboundPipeline`), so a token past the cap
+     * would be the part that vanished. Text first, so a build that predates the card reads
+     * "See you at the gate / geo:…" in that order.
+     */
+    private fun bodyWithLocation(
+        text: String,
+        staged: StagedLocation?,
+    ): String? {
+        if (staged == null) return text
+        val token = staged.token
+        if (token == null) {
+            _events.tryEmit(R.string.chat_location_not_ready)
+            return null
+        }
+        return listOf(textBeforeLocation(text, token), token).filter { it.isNotEmpty() }.joinToString("\n")
+    }
+
+    /**
+     * The composer's [styles], which index the untrimmed [draft], as `sendChat` takes them: against the body it is
+     * handed (ADR 2026-10.p95v). They move left by the whitespace `trim()` took and stop where the words do, short of a
+     * position's own line, so a span never covers the `geo:` token.
+     */
+    private fun spansForBody(
+        draft: String,
+        trimmed: String,
+        staged: StagedLocation?,
+        styles: List<StyleSpan>,
+    ): List<StyleSpan> {
+        if (styles.isEmpty()) return emptyList()
+        val kept = staged?.token?.let { textBeforeLocation(trimmed, it).length } ?: trimmed.length
+        return StyleSpans.rebase(styles, dropLeading = draft.length - draft.trimStart().length, length = kept)
+    }
+
+    /** What of [text] [bodyWithLocation] keeps ahead of [token]'s line: cut so the token fits under the cap. */
+    private fun textBeforeLocation(
+        text: String,
+        token: String,
+    ): String = text.clampToUtf16(TextLimits.MESSAGE - token.length - 1)
+
+    /**
+     * Sends the draft. [translatedInto] is the language the composer translated it into, while the field holds that
+     * translation, and [typedIn] the keyboard language it was typed in ([InputLanguageTally]): the first, else the
+     * second, is the language the message declares (ADR 2026-10.t2h6's 2026-10-29 amendment). [translatedFrom] is the
+     * language that translation's draft was in, kept on our own row alone (the 2026-11-02 amendment): the reader's
+     * language reads it, never the translated body.
+     */
+    fun send(
+        text: String,
+        mentions: List<Mention> = emptyList(),
+        replyTo: ReplyRef? = null,
+        styles: List<StyleSpan> = emptyList(),
+        translatedInto: TranslateLang? = null,
+        typedIn: String? = null,
+        translatedFrom: TranslateLang? = null,
+    ) {
+        val trimmed = text.trim().clampToUtf16(TextLimits.MESSAGE)
+        val staged = _stagedLocation.value
+        if (trimmed.isEmpty() && _pendingAttachment.value == null && staged == null) return
+        // A room its relay no longer runs takes nothing: a post would sit in the outbox of a scope we stopped
+        // subscribing. The screen draws no composer there; this covers a send already in flight past it.
+        if (state.value.commonsStale) return
+        // The Meshtastic room is not addressed to anybody: no recipient, no group, no attachment, no reply.
+        // `sendChat` would read that shape as the Nearby room and put the post there, so it has its own path
+        // to the board, with its own gate, disclosure and refusals.
+        if (isBridged) {
+            postPublic(trimmed)
+            return
+        }
+        val body = bodyWithLocation(trimmed, staged) ?: return
+        // The bridged room above sends no formatting: its line goes to other clients as plain text.
+        val spans = spansForBody(text, trimmed, staged, styles)
+        // Ignore re-entrant taps while a send is in flight, and — on success — until the field is
+        // actually cleared, so a tap landing in the gap between sendChat returning and clearText running
+        // can't re-send the same draft. Released in the blocked branch and in onInputCleared().
+        if (_isSending.value) return
+        _isSending.value = true
+        viewModelScope.launch {
+            // Deferred release: an accepted send keeps the guard held until the field is actually
+            // cleared (onInputCleared); the finally frees it on a block or an unexpected send-path throw
+            // so the guard can never stick and freeze the input.
+            var accepted = false
+            try {
+                // Normalize a self-quote's snapshotted author before it goes on the wire (see the helper).
+                val outgoingReply = normalizeSelfAuthor(replyTo)
+                // A group thread whose row is gone — deleted from the list, opened by a stale route — is never sent
+                // as a DM: `route` would read the missing row as a peer thread and file the text under the group id
+                // as a pending-key DM to a node that does not exist (ADR 2026-10.jbsa).
+                if (Conversations.kindFor(conversationId) == ConversationKind.GROUP && groups.find(conversationId) == null) {
+                    _events.tryEmit(R.string.chat_gone)
+                    return@launch
+                }
+                val declared = declaredFor(translatedInto, typedIn)
+                val draftFrom = draftFromFor(translatedInto, translatedFrom)
+                val sent = route(body, attachmentForSend(body), mentions, outgoingReply, spans, declared, draftFrom)
+                // MeshManager applies block-on-send. Clear the input/attachment only once a message is
+                // accepted; a blocked message keeps the draft and surfaces a toast so the user can edit.
+                if (sent) {
+                    accepted = true
+                    // The voice description is deliberately NOT written here. It rides on the staged
+                    // [AttachmentStore.Ingested] and is written by `MeshManager.sendChat` against the hash
+                    // the row actually holds — for a DM or group that is the attachment's *ciphertext*
+                    // hash, so writing it here against the plaintext hash staged above would silently
+                    // update no rows at all.
+                    _pendingAttachment.value = null
+                    // The position went with the message; nothing is listening any more.
+                    clearLocation()
+                    // The next draft starts clean: no dismissed link, no failed ones, and a card fetch still in
+                    // flight for this one can no longer stage into it.
+                    dismissedUrl = null
+                    failedUrls.clear()
+                    draftEpoch.value++
+                    // The message is away; what is about to be cleared from the field is not a draft any more.
+                    // Dropped here rather than left to the field's own empty report, which a user who sends
+                    // and immediately leaves never gives us — and which, when it does come, now matches the row.
+                    drafts.clear(conversationId)
+                    if (persisted != null) persisted = Draft.EMPTY
+                    // Guard stays held until the screen reports the field cleared (onInputCleared), so no
+                    // duplicate can slip through the tryEmit -> collect -> clearText hop.
+                    _clearInput.tryEmit(Unit)
+                } else {
+                    // Only the Nearby room screens what is sent (ADR 2026-10.9rh6); a commons refuses a post
+                    // only when this phone is no longer in it.
+                    _events.tryEmit(if (isCommons) R.string.chat_commons_not_joined else R.string.moderation_text_blocked)
+                }
+            } finally {
+                if (!accepted) _isSending.value = false
+            }
+        }
+    }
+
+    /**
+     * Hands one send to the path its thread kind takes. A commons post has its own (spool only, never the
+     * radios): `sendChat` would read a no-recipient, no-group shape as the Nearby room. The group is re-read at
+     * send time so it is never misrouted as a DM in a startup race, and so a pending rename rides this message
+     * (its GroupInfo.name converges last-writer-wins).
+     */
+    private suspend fun route(
+        body: String,
+        attachment: AttachmentStore.Ingested?,
+        mentions: List<Mention>,
+        replyTo: ReplyRef?,
+        styles: List<StyleSpan>,
+        declared: DeclaredLangs,
+        draftTranslatedFrom: String?,
+    ): Boolean {
+        if (isCommons) {
+            return meshManager.sendCommons(
+                conversationId,
+                body,
+                mentions,
+                replyTo,
+                attachment,
+                styles = styles,
+                declared = declared,
+                draftTranslatedFrom = draftTranslatedFrom,
+            )
+        }
+        val group = if (isRoom) null else groups.find(conversationId)
+        if (group != null) {
+            return meshManager.sendChat(
+                body,
+                attachment,
+                mentions,
+                recipientId = null,
+                group = group.toGroupInfo(),
+                replyTo = replyTo,
+                styles = styles,
+                declared = declared,
+                draftTranslatedFrom = draftTranslatedFrom,
+            )
+        }
+        // Broadcast room -> no recipient; a DM thread is keyed by the peer's node id.
+        val recipientId = if (isRoom) null else conversationId
+        return meshManager.sendChat(
+            body,
+            attachment,
+            mentions,
+            recipientId,
+            replyTo = replyTo,
+            styles = styles,
+            declared = declared,
+            draftTranslatedFrom = draftTranslatedFrom,
+        )
+    }
+
+    /**
+     * What a message declares (ADR 2026-10.t2h6's 2026-10-29 amendment): the language the composer translated it into,
+     * else the one it was typed in ([TranslateTarget.declaration]; the receiver reads the words itself), and the language
+     * this reader says they read, each only when not implied. Nothing where translation is not wired or is off in
+     * Settings, read at the send so a switch just flipped is obeyed.
+     */
+    private suspend fun declaredFor(
+        translatedInto: TranslateLang?,
+        typedIn: String?,
+    ): DeclaredLangs {
+        val t = translation ?: return DeclaredLangs.NONE
+        if (!settings.translationEnabled.first()) return DeclaredLangs.NONE
+        val (lang, reads) = TranslateTarget.declaration(translatedInto, typedIn, t.declaredReads())
+        return DeclaredLangs.of(lang, reads)
+    }
+
+    /**
+     * The language a translated draft was in, for our own row ([TranslateTarget.draftFrom], ADR 2026-10.t2h6's
+     * 2026-11-02 amendment), only where translation is wired and on, as [declaredFor] reads it. Never framed.
+     */
+    private suspend fun draftFromFor(
+        translatedInto: TranslateLang?,
+        translatedFrom: TranslateLang?,
+    ): String? {
+        val from = TranslateTarget.draftFrom(translatedInto, translatedFrom) ?: return null
+        if (translation == null || !settings.translationEnabled.first()) return null
+        return from
+    }
+
+    /**
+     * Normalizes a quoted-reply's author snapshot before it goes on the wire: a reply quoting *our own*
+     * message must carry the display name a peer resolves for us — never the local "You" self-label — so
+     * every recipient shows our real name and only swaps in "You" when they are themselves the quoted
+     * author. A reply to anyone else is returned unchanged (its snapshot is already a peer-resolved name).
+     */
+    private suspend fun normalizeSelfAuthor(replyTo: ReplyRef?): ReplyRef? {
+        val me = identity.nodeId()
+        return replyTo
+            ?.takeIf { it.authorId == me }
+            ?.copy(author = displayNameFor(settings.displayName.first(), me))
+            ?: replyTo
+    }
+
+    /**
+     * The screen finished clearing the input after an accepted send; release the double-submit guard.
+     * Deferred to here (rather than the success branch above) so the guard covers the window between
+     * [send] returning and the field visually clearing — see [isSending].
+     */
+    fun onInputCleared() {
+        _isSending.value = false
+    }
+
+    /**
+     * Toggles the local user's [emoji] reaction on [messageId] (add / replace / remove) and floods it.
+     * Passes the thread context along, resolved the same way [send] does (re-read at send time), so a
+     * DM/group reaction rides sealed where the conversation supports it — the manager never re-derives
+     * the context from the message row.
+     */
+    fun react(
+        messageId: String,
+        emoji: String,
+    ) {
+        // The Meshtastic room has no tapback form: a reaction there would fall through to the manager's cleartext
+        // flood over the radios. A commons posts its own into the room (C-7.4-13), never by that path.
+        if (isBridged) return
+        // Nor does a room its relay no longer runs: the frame would go nowhere.
+        if (state.value.commonsStale) return
+        // Tapping the chip you already own retracts — undoing a choice, not making one — so only an add or a
+        // replace fronts the recents. Judged from the highlighted chip the user is looking at, after the send.
+        val retracting =
+            state.value.rows
+                .firstOrNull { it.id == messageId }
+                ?.reactions
+                ?.any { it.mine && it.emoji == emoji } == true
+        viewModelScope.launch {
+            if (isCommons) {
+                if (!meshManager.sendCommonsReaction(conversationId, messageId, emoji)) return@launch
+            } else {
+                val group = if (isRoom) null else groups.find(conversationId)?.toGroupInfo()
+                val recipientId = if (isRoom || group != null) null else conversationId
+                meshManager.sendReaction(messageId, emoji, recipientId, group)
+            }
+            if (!retracting) settings.recordReaction(emoji)
+        }
+    }
+
+    /**
+     * Pins [messageId] to the top of this chat, or unpins it, as [pinned] says (#42). The caller passes the state it
+     * wants rather than asking for a toggle, so a second tap that lands before the bar has caught up does nothing
+     * instead of undoing the first. On this phone only: nothing is sent, so nobody else in the chat sees it. A pin past
+     * [PinRepository.MAX_PER_CHAT] unpins the thread's oldest, and the screen says so.
+     */
+    fun setPinned(
+        messageId: String,
+        pinned: Boolean,
+    ) {
+        val repo = pins ?: return
+        viewModelScope.launch {
+            if (repo.setPinned(messageId, pinned, System.currentTimeMillis()) == PinOutcome.PinnedReplacingOldest) {
+                _events.tryEmit(R.string.chat_pin_replaced_oldest)
+            }
+        }
+    }
+
+    /**
+     * Removes [messageId] from this device only, through [LocalMessageDelete]: its row, its reactions, its pin, its
+     * per-recipient delivery rows, and (if no other message still references it) its content-addressed attachment
+     * blob. Sends nothing over the mesh.
+     */
+    fun deleteMessage(messageId: String) {
+        val hash =
+            state.value.rows
+                .firstOrNull { it.id == messageId }
+                ?.attachmentHash
+        viewModelScope.launch {
+            localDelete.delete(messageId, hash)
+            _events.tryEmit(R.string.chat_message_deleted)
+        }
+    }
+
+    /**
+     * Blocks [nodeId] locally: their messages/reactions stop being stored, shown, and notified, and their pinned
+     * messages are unpinned, so a pin nobody can see no longer takes one of the chat's places.
+     */
+    fun block(nodeId: String) {
+        viewModelScope.launch {
+            settings.block(nodeId, peers.find(nodeId)?.deviceTag)
+            pins?.unpinFrom(nodeId)
+            _events.tryEmit(R.string.chat_user_blocked)
+            // Blocking the peer of a DM empties this thread (and hides it from the list), so close the
+            // now-confusing screen. Emitted only after the block persists, so navigating away can't
+            // cancel the write. Blocking from the Nearby room leaves the room open.
+            if (!isRoom) _closeChat.tryEmit(Unit)
+        }
+    }
+
+    /**
+     * Dismisses the room's "never sent over the Internet" notice, for good. Reachable only from that notice's
+     * close button — the room is the one thread whose notice offers one (see `dismissable`) — and it stays
+     * dismissed across restarts, because the fact it stated is permanent and repeating it is a nag.
+     */
+    fun dismissRelayNotice() {
+        viewModelScope.launch { settings.dismissRelayRoomNotice() }
+    }
+
+    /** Unblocks [nodeId], restoring their (never-deleted) message history. */
+    fun unblock(nodeId: String) {
+        viewModelScope.launch {
+            settings.unblock(nodeId, peers.find(nodeId)?.deviceTag)
+            _events.tryEmit(R.string.chat_user_unblocked)
+        }
+    }
+
+    /**
+     * Ingests a picked or keyboard-inserted image and stages it in the input bar. A decode failure is
+     * silently ignored, as before — the picture is still sitting in the picker, so there is nothing to
+     * explain. A URI [outsideUris] refuses (one naming Knit's own files, from a paste or a keyboard) is never
+     * read, and is dropped as quietly.
+     */
+    fun attach(uri: Uri) {
+        if (!outsideUris.admits(uri)) return
+        viewModelScope.launch { attachPicture(uri, shared = false, sharedType = null) }
+    }
+
+    /**
+     * [attach] for a picture or video another app shared ([app.getknit.knit.ui.share.ShareInbox]), [type] being the
+     * type the share declared. Unlike a pick, a failure speaks: the sender left the other app for this composer, and
+     * a share that stages nothing reads as Knit ignoring it (#268). A share Knit cannot read at all goes the image
+     * way, because without a grant the provider will not say it is a video either; [type] still calls it one.
+     *
+     * A share [outsideUris] refuses is never read and says what an unreadable one says, so the sender learns
+     * nothing about why (#284).
+     */
+    fun attachShared(
+        uri: Uri,
+        type: String?,
+    ) {
+        if (!outsideUris.admits(uri)) {
+            val unreadable = AttachmentStore.IngestResult.Reason.Unreadable
+            _events.tryEmit(if (type?.startsWith("video/") == true) R.string.chat_video_unreadable else ingestFailureMessage(unreadable))
+            return
+        }
+        viewModelScope.launch { attachPicture(uri, shared = true, sharedType = type) }
+    }
+
+    /** [attach]'s and [attachShared]'s door: the video encode for a video, else the image ingest. */
+    private suspend fun attachPicture(
+        uri: Uri,
+        shared: Boolean,
+        sharedType: String?,
+    ) {
+        if (attachments.isVideo(uri)) {
+            attachVideo(uri)
+            return
+        }
+        val result = attachments.ingest(uri, screen = isRoom, fitBytes = photoFit())
+        val unreadable = (result as? AttachmentStore.IngestResult.Failed)?.reason == AttachmentStore.IngestResult.Reason.Unreadable
+        if (shared && unreadable && sharedType?.startsWith("video/") == true) {
+            _events.tryEmit(R.string.chat_video_unreadable)
+        } else {
+            stage(result, notifyFailure = shared)
+        }
+    }
+
+    private val _videoEncoding = MutableStateFlow<Float?>(null)
+
+    /** While a picked video is being re-encoded, how far along (0..1); null otherwise. ADR 2026-10.hmfe. */
+    val videoEncoding: StateFlow<Float?> = _videoEncoding.asStateFlow()
+
+    private var videoJob: Job? = null
+
+    /**
+     * A picked video longer than 61 s, waiting on the sender's "Send the first 61 seconds?" before it is encoded
+     * ([durationMs] is its full length, for the question); [orAsFile] is the pick's button, as [attachVideo] takes it.
+     */
+    data class LongVideo(
+        val uri: Uri,
+        val durationMs: Long,
+        val orAsFile: Boolean,
+    )
+
+    private val _longVideo = MutableStateFlow<LongVideo?>(null)
+
+    /** The long video the composer is asking about, or null. ADR 2026-10.hmfe's 2026-10-31 amendment. */
+    val longVideo: StateFlow<LongVideo?> = _longVideo.asStateFlow()
+
+    /**
+     * Re-encodes a picked video small (ADR 2026-10.hmfe) and stages it, the composer showing the encode's progress
+     * meanwhile. Refused up front where a video can never go — the Meshtastic room, and a commons whose relay takes
+     * text only — rather than after a half-minute encode. A new pick cancels one still encoding, as does [cancelVideoEncoding] and
+     * leaving the chat (the job is the screen's). Every failure speaks: unlike a photo, the user waited for it.
+     *
+     * A video past 61 s is not encoded until the sender says yes to sending its first 61 ([longVideo], then
+     * [sendLongVideo]): its length is read off the container first, so the question comes before the wait rather
+     * than a notice after it.
+     *
+     * [orAsFile] is the file button's pick: a video the encoder cannot read or encode is still a file, so it goes out
+     * as-is through [attachAsFile] rather than being refused. One that stays too big after shrinking does not: past
+     * the ceiling it is past the 8 MB file cap too, and the message names Direct file send.
+     */
+    private fun attachVideo(
+        uri: Uri,
+        orAsFile: Boolean = false,
+    ) {
+        if (isBridged || state.value.commonsTextOnly) {
+            _events.tryEmit(R.string.chat_video_text_only)
+            return
+        }
+        videoJob?.cancel()
+        _longVideo.value = null
+        videoJob =
+            viewModelScope.launch {
+                // A length the container does not give (null) falls to the encode, which reads the video itself and
+                // says what it makes of it.
+                val durationMs = attachments.videoDurationMs(uri)
+                if (durationMs != null && VideoEncodePolicy.cuts(durationMs)) {
+                    _longVideo.value = LongVideo(uri, durationMs, orAsFile)
+                } else {
+                    encodeVideo(uri, orAsFile)
+                }
+            }
+    }
+
+    /** "Send the first 61 seconds?" answered yes: the video the question was about is encoded, cut, and staged. */
+    fun sendLongVideo() {
+        val ask = _longVideo.value ?: return
+        _longVideo.value = null
+        videoJob?.cancel()
+        videoJob = viewModelScope.launch { encodeVideo(ask.uri, ask.orAsFile) }
+    }
+
+    /** "Send the first 61 seconds?" answered no: nothing is encoded or staged. */
+    fun dismissLongVideo() {
+        _longVideo.value = null
+    }
+
+    /** [attachVideo]'s encode and stage, once the video is one Knit sends as it is or the sender agreed to the cut. */
+    private suspend fun encodeVideo(
+        uri: Uri,
+        orAsFile: Boolean,
+    ) {
+        _videoEncoding.value = 0f
+        try {
+            when (val result = attachments.ingestVideo(uri, screen = isRoom) { _videoEncoding.value = it }) {
+                is AttachmentStore.IngestResult.Failed -> {
+                    val tooLarge = result.reason == AttachmentStore.IngestResult.Reason.TooLarge
+                    when {
+                        tooLarge -> _events.tryEmit(R.string.chat_video_too_large)
+                        orAsFile -> attachAsFile(uri)
+                        else -> _events.tryEmit(R.string.chat_video_unreadable)
+                    }
+                }
+
+                is AttachmentStore.IngestResult.Success -> {
+                    stage(result, notifyFailure = true)
+                }
+            }
+        } finally {
+            _videoEncoding.value = null
+        }
+    }
+
+    /** Stops a video encode the composer is showing; nothing is staged. */
+    fun cancelVideoEncoding() {
+        videoJob?.cancel()
+        videoJob = null
+    }
+
+    /**
+     * Ingests a picked **file** of any type and stages it. Unlike [attach] every failure speaks up: a file
+     * refused for its size cannot be shrunk the way a photo is, and one refused for being an app package is
+     * a decision rather than an accident, so silence would read as the app doing nothing. A URI [outsideUris]
+     * refuses is never read, not even to ask whether it is a video, and is unreadable as far as the sender is told.
+     */
+    fun attachFile(uri: Uri) {
+        if (!outsideUris.admits(uri)) {
+            _events.tryEmit(R.string.chat_transfer_unreadable)
+            return
+        }
+        viewModelScope.launch {
+            // A video is a video whichever button picked it (ADR 2026-10.hmfe's amendment): sent as-is it would be
+            // refused past 8 MB, and under it would go out with no poster, as a file bubble on our side.
+            if (attachments.isVideo(uri)) {
+                attachVideo(uri, orAsFile = true)
+            } else {
+                attachAsFile(uri)
+            }
+        }
+    }
+
+    /**
+     * Stages a file Knit wrote itself (a field log or a crash report from Diagnostics, #287), handed over as bytes.
+     * There is no URI to ask [outsideUris] about: Knit's own provider is refused on a URI's word because another app
+     * could name it (ADR 2026-11.vdx4), and these bytes never left the process. The rest is [attachFile]'s: the same
+     * refusals, every one of them spoken, and the same ingest.
+     */
+    fun attachOwnFile(file: OwnFile) {
+        viewModelScope.launch {
+            refusalForFile()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            stage(attachments.ingestFileBytes(file.bytes, file.name, file.mime, screen = isRoom), notifyFailure = true)
+        }
+    }
+
+    /** [attachFile]'s refusals and ingest, the bytes sent as they are. */
+    private suspend fun attachAsFile(uri: Uri) {
+        refusalForFile()?.let {
+            _events.tryEmit(it)
+            return
+        }
+        stage(attachments.ingestFile(uri, screen = isRoom), notifyFailure = true)
+    }
+
+    // --- direct file transfer (transfer/TransferManager) ---
+
+    private val _showTransferConsent = MutableStateFlow<TransferConsent?>(null)
+
+    /** The direct-transfer disclosure on screen, and what it is standing in front of, or null. See [sendFileDirectly]. */
+    val showTransferConsent: StateFlow<TransferConsent?> = _showTransferConsent.asStateFlow()
+
+    private val _transferPickerNeeded = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /**
+     * Fires once the disclosure stands accepted and a file may be picked. The screen answers it by opening the
+     * document picker, which is a composable's job — the same hand-off [locationPermissionNeeded] makes.
+     */
+    val transferPickerNeeded: SharedFlow<Unit> = _transferPickerNeeded.asSharedFlow()
+
+    private val _directSend = MutableStateFlow<DirectSendSheet?>(null)
+
+    /** The file-or-models sheet on screen (ADR 2026-11.ejn8), or null. Never shown where no model could go. */
+    val directSend: StateFlow<DirectSendSheet?> = _directSend.asStateFlow()
+
+    /**
+     * The overflow item was tapped. Refuse here rather than after the picker: somebody who hunts down a 2 GB
+     * video and is only then told this thread cannot take one has been made to work for nothing. Then the
+     * disclosure, once per device, and then the picker.
+     */
+    fun sendFileDirectly() {
+        viewModelScope.launch {
+            refusalForTransfer()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            if (settings.directTransferConsented.first()) {
+                chooseWhatToSend()
+            } else {
+                _showTransferConsent.value = TransferConsent(incoming = false)
+            }
+        }
+    }
+
+    /**
+     * The picker, unless this phone holds translation models the peer can take: then the sheet asks which first
+     * (ADR 2026-11.ejn8). Read at the tap, so a model downloaded a moment ago is offered.
+     */
+    private fun chooseWhatToSend() {
+        val models = sendableModels()
+        if (models.isEmpty()) _transferPickerNeeded.tryEmit(Unit) else _directSend.value = DirectSendSheet.Choose(models)
+    }
+
+    /**
+     * The models this phone may offer: none unless translation is packaged and switched on. Every peer that takes a
+     * direct transfer can be offered them, since a build that cannot install them takes the archive as a file.
+     */
+    private fun sendableModels(): List<ModelChoice> {
+        val translation = translation ?: return emptyList()
+        if (!translationOn.value) return emptyList()
+        return translation.models.value
+            .filterValues { it == SttModelState.Ready }
+            .keys
+            .sortedWith(compareBy({ it.from.code }, { it.to.code }))
+            .map { ModelChoice(it.pin, it.from, it.to, it.bytes) }
+    }
+
+    // Where one pin of a models offer stands on this phone, for its card (ADR 2026-11.ejn8): a direction already here
+    // or downloading is held; one this build's table does not pin is another version's.
+    private fun modelStanding(pin: Long): ModelStanding {
+        val direction = TranslateDirection.ofPin(pin) ?: return ModelStanding.Unknown
+        val state = translation?.models?.value?.get(direction)
+        return if (state == SttModelState.Ready || state is SttModelState.Downloading) ModelStanding.Held else ModelStanding.New
+    }
+
+    /** The sheet's "A file": on to the document picker. */
+    fun chooseFileToSend() {
+        _directSend.value = null
+        _transferPickerNeeded.tryEmit(Unit)
+    }
+
+    /** The sheet's "Translation models": on to the list. */
+    fun chooseModelsToSend() {
+        _directSend.update { sheet -> sheet?.let { DirectSendSheet.PickModels(it.models) } }
+    }
+
+    fun dismissDirectSend() {
+        _directSend.value = null
+    }
+
+    /** Offers the translation models [pins] to this DM's peer as one bundle over a direct link (ADR 2026-11.ejn8). */
+    fun offerModels(pins: List<Long>) {
+        _directSend.value = null
+        if (pins.isEmpty()) return
+        viewModelScope.launch {
+            refusalForTransfer()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            val outcome = transfers.offerModels(conversationId, pins)
+            if (outcome is OfferOutcome.Refused) _events.tryEmit(transferRefusalMessage(outcome.refusal))
+        }
+    }
+
+    /**
+     * Records the disclosure, lowers it and carries on to whatever raised it — the picker on this side, the
+     * offer being answered on the other. One tap does both, as [acceptLocationConsent] does: the sheet's
+     * button says what the tap behind it said.
+     */
+    fun acceptTransferConsent() {
+        val request = _showTransferConsent.value ?: return
+        viewModelScope.launch {
+            settings.acceptDirectTransferConsent()
+            _showTransferConsent.value = null
+            val id = request.transferId
+            if (id == null) chooseWhatToSend() else startAccept(id)
+        }
+    }
+
+    /** Lowers the disclosure without recording anything, so the next attempt asks again. */
+    fun dismissTransferConsent() {
+        _showTransferConsent.value = null
+    }
+
+    /** Offers the file at [uri] to this DM's peer over a one-shot Wi-Fi Direct link; the bytes never ride the mesh. */
+    fun offerTransfer(uri: Uri) {
+        // The transfer reads [uri] minutes from now, as Knit; one naming Knit's own files is never offered (#284).
+        if (!outsideUris.admits(uri)) {
+            _events.tryEmit(R.string.chat_transfer_unreadable)
+            return
+        }
+        viewModelScope.launch {
+            refusalForTransfer()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            val outcome = transfers.offer(conversationId, uri.toString())
+            if (outcome is OfferOutcome.Refused) _events.tryEmit(transferRefusalMessage(outcome.refusal))
+        }
+    }
+
+    /** Calls this thread's peer (experimental). The call screen opens from the call layer; a refusal is a toast. */
+    fun startCall() = placeCall(CallKind.LIVE)
+
+    /** Calls this thread's peer as a walkie-talkie over the mesh (§3.11); a peer without one is a toast. */
+    fun startMeshCall() = placeCall(CallKind.WALKIE)
+
+    private fun placeCall(kind: CallKind) {
+        val calls = calls ?: return
+        viewModelScope.launch {
+            val refusal =
+                refusalForCall(kind) ?: refusalForMeshCall(kind) ?: when (calls.start(conversationId, kind)) {
+                    null -> null
+                    CallRefusal.BUSY -> R.string.chat_call_busy
+                    CallRefusal.SELF -> R.string.chat_call_needs_dm
+                    CallRefusal.NO_LIVE -> R.string.chat_mesh_call_peer_too_old
+                    CallRefusal.NO_RELAY -> R.string.chat_call_no_relay
+                }
+            refusal?.let { _events.tryEmit(it) }
+        }
+    }
+
+    /** A mesh call goes only toward a pinned profile carrying [Protocol.CAP_WALKIE] (C-3.11-1). */
+    private suspend fun refusalForMeshCall(kind: CallKind): Int? =
+        R.string.chat_mesh_call_peer_too_old.takeIf {
+            kind == CallKind.WALKIE && (peers.find(conversationId)?.capabilities ?: 0L) and Protocol.CAP_WALKIE == 0L
+        }
+
+    /**
+     * Why this thread cannot be called, or null when it can: a DM only, and a live call toward a pinned profile carrying
+     * [Protocol.CAP_CALL] (C-3.1-2) — a build without it would swallow the offer and the call would ring out unheard. A
+     * mesh call needs [Protocol.CAP_WALKIE] alone ([refusalForMeshCall]): a build may take that kind only. No nearness
+     * test: a call rides the Internet plane as readily as the radios.
+     */
+    private suspend fun refusalForCall(kind: CallKind): Int? {
+        val members = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        if (isRoom || conversationId == Conversations.MESHTASTIC || members.isNotEmpty()) return R.string.chat_call_needs_dm
+        if (kind == CallKind.LIVE && (peers.find(conversationId)?.capabilities ?: 0L) and Protocol.CAP_CALL == 0L) {
+            return R.string.chat_call_peer_too_old
+        }
+        return null
+    }
+
+    /**
+     * Why this thread cannot take a large file, or null when it can: a DM only, toward a pinned profile
+     * carrying [Protocol.CAP_DIRECT_TRANSFER] (the [refusalForFile] rule — gate the send on a fact the peer
+     * told us, never the affordance), and a peer this phone can see right now, since the offer has to be
+     * answered while both are still in range. This phone must be one that may host the group (ADR 2026-10.w3dw).
+     */
+    private suspend fun refusalForTransfer(): Int? {
+        // A group is a roster, not a row: the group repository answers for every id (a relaxed double included),
+        // so the same members test refusalForFile uses is the honest one here.
+        val members = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        if (isRoom || conversationId == Conversations.MESHTASTIC || members.isNotEmpty()) return R.string.chat_transfer_needs_dm
+        if (!transfers.mayOffer()) return R.string.chat_transfer_cannot_host
+        if ((peers.find(conversationId)?.capabilities ?: 0L) and Protocol.CAP_DIRECT_TRANSFER == 0L) {
+            return R.string.chat_transfer_peer_too_old
+        }
+        if (meshManager.neighbors.value.none { it.nodeId == conversationId }) return R.string.chat_transfer_peer_not_nearby
+        return null
+    }
+
+    /**
+     * Answers an incoming offer. Accepting is the moment this phone's radio changes hands and a file starts
+     * arriving in shared storage, so on the first direct transfer it reads the disclosure first.
+     */
+    fun acceptTransfer(id: String) {
+        viewModelScope.launch {
+            if (settings.directTransferConsented.first()) {
+                startAccept(id)
+            } else {
+                val models = transfers.states.value[id]?.models != null
+                _showTransferConsent.value = TransferConsent(incoming = true, transferId = id, models = models)
+            }
+        }
+    }
+
+    private suspend fun startAccept(id: String) {
+        transfers.accept(id)?.let { _events.tryEmit(transferRefusalMessage(it)) }
+    }
+
+    fun declineTransfer(id: String) {
+        viewModelScope.launch { transfers.decline(id) }
+    }
+
+    fun cancelTransfer(id: String) {
+        viewModelScope.launch { transfers.cancel(id) }
+    }
+
+    /**
+     * Offers the file of a transfer that ended short again, from its card. The thread's refusals come first,
+     * as they do for the overflow item. The disclosure does not, because this phone has sent the file before.
+     */
+    fun retryTransfer(id: String) {
+        viewModelScope.launch {
+            refusalForTransfer()?.let {
+                _events.tryEmit(it)
+                return@launch
+            }
+            val outcome = transfers.retry(id)
+            if (outcome !is OfferOutcome.Refused) return@launch
+            _events.tryEmit(transferRefusalMessage(outcome.refusal))
+            if (outcome.refusal == TransferRefusal.Unreadable) retrySources.update { it + (id to false) }
+        }
+    }
+
+    /**
+     * Checks, once per row, whether the file a sender's Retry would send can still be read ([retrySources]). Rows
+     * are taken from the window as they become eligible, so a transfer that fails while the chat is open is
+     * checked then.
+     */
+    private fun watchRetrySources() {
+        viewModelScope.launch {
+            windowed
+                .filterNotNull()
+                .map { window ->
+                    window.messages
+                        .filter { it.kind == MessageEntity.KIND_FILE_TRANSFER }
+                        .mapNotNull { row -> TransferRecord.decode(row.body)?.takeIf { it.retryable(live = false) } }
+                        .associateBy { it.id }
+                }.distinctUntilChanged()
+                .collect { candidates ->
+                    candidates.forEach { (id, record) ->
+                        if (id !in retrySources.value) {
+                            // The file still readable, or every model still installed (ADR 2026-11.ejn8).
+                            val readable = transfers.retryReadable(record)
+                            retrySources.update { it + (id to readable) }
+                        }
+                    }
+                }
+        }
+    }
+
+    /**
+     * Why this thread cannot take a file, or null when it can.
+     *
+     * The composer already hides the "File" item where [ChatUiState.canSendFile] is false, so for a picked
+     * file this only re-states a decision the UI made. The share sheet is why it exists: a file arriving
+     * from another app is drained on the chat's first composition, before the state combine has read a
+     * single peer row, so a check against the rendered state would refuse every capable peer exactly once —
+     * and refuse it with the wrong reason. Reading the repositories directly has no such window, and
+     * [isRoom] is settled at construction.
+     *
+     * Returns a string resource, or null. Not `@StringRes`-annotated: a nullable `Int?` boxes, and the
+     * annotation only applies to a primitive.
+     */
+    private suspend fun refusalForFile(): Int? {
+        if (isRoom) return R.string.chat_share_needs_chat
+        val members = groups.find(conversationId)?.let { GroupMembersStore.decode(it.members) }.orEmpty()
+        val me = identity.nodeId()
+        val audience = if (members.isEmpty()) listOf(conversationId) else members.filter { it != me }
+        val capable =
+            audience.isNotEmpty() &&
+                audience.all { (peers.find(it)?.capabilities ?: 0L) and Protocol.CAP_FILES != 0L }
+        return if (capable) null else R.string.chat_file_peer_too_old
+    }
+
+    /**
+     * Ingests a photo just taken with the in-app camera ([app.getknit.knit.ui.camera.PhotoCapture]) and
+     * stages it exactly like a picked one. The bytes arrive in memory and are never written to disk.
+     *
+     * Unlike [attach] this **does** surface a failure: the shot exists nowhere else, so silently
+     * dropping it would look like the camera simply did nothing.
+     */
+    fun attachCaptured(jpeg: ByteArray) {
+        viewModelScope.launch {
+            stage(
+                attachments.ingest(jpeg, "image/jpeg", screen = isRoom, fitBytes = photoFit()),
+                notifyFailure = true,
+            )
+        }
+    }
+
+    /**
+     * Stages an ingested image, or handles its verdict. Only the public Nearby room screens a picture on
+     * the way out, and it **blocks** one flagged as explicit outright; a DM or a group never screens, so its
+     * ingest is never flagged — its receivers screen what arrives and hide it behind their own Content
+     * filtering toggle (ADR 2026-10.9rh6).
+     */
+    private suspend fun stage(
+        result: AttachmentStore.IngestResult,
+        notifyFailure: Boolean,
+    ) {
+        when (result) {
+            is AttachmentStore.IngestResult.Success -> {
+                when {
+                    // The Meshtastic room carries one line of text and nothing beside it: `sendPublicPost` takes
+                    // a string, so anything staged here would sit in the composer and then vanish at send. The
+                    // composer already offers no picker and tells the keyboard it takes no images, so what
+                    // reaches this is the share sheet — which lists the room, because sharing *text* into it is
+                    // a fair thing to want. One refusal at the funnel covers every route into it.
+                    isBridged -> {
+                        blobs.deleteIfUnreferenced(result.ingested.hash)
+                        _events.tryEmit(R.string.chat_mesh_text_only)
+                    }
+
+                    // A commons whose relay takes no attachments for it (S-7.4-5): the bytes would have no way there.
+                    state.value.commonsTextOnly -> {
+                        blobs.deleteIfUnreferenced(result.ingested.hash)
+                        _events.tryEmit(R.string.chat_commons_text_only)
+                    }
+
+                    isRoom && result.flagged -> {
+                        // Hard block in the broadcast room, the one scope that screens; drop the unsent blob.
+                        blobs.deleteIfUnreferenced(result.ingested.hash)
+                        _events.tryEmit(
+                            if (result.ingested.video != null) R.string.moderation_video_blocked else R.string.moderation_image_blocked,
+                        )
+                    }
+
+                    else -> {
+                        // A staged card gives way to whatever the user attached on purpose (one slot).
+                        _pendingAttachment.value?.takeIf { it.link != null && result.ingested.link == null }?.let { card ->
+                            blobs.deleteIfUnreferenced(card.hash)
+                        }
+                        _pendingAttachment.value = result.ingested
+                    }
+                }
+            }
+
+            is AttachmentStore.IngestResult.Failed -> {
+                if (notifyFailure) _events.tryEmit(ingestFailureMessage(result.reason))
+            }
+        }
+    }
+
+    /**
+     * Starts recording a voice note. Returns false when the microphone couldn't be opened — held by a call
+     * or another app — so the composer can say so rather than showing a recorder that captures silence. The
+     * caller has already cleared the `RECORD_AUDIO` gate.
+     *
+     * [locked] starts a hands-free recording directly (the accessibility tap path); hold-to-talk starts
+     * unlocked and flips via [lockVoiceRecording] when the user slides up.
+     */
+    fun startVoiceRecording(locked: Boolean = false): Boolean {
+        if (_voiceRecording.value != null) return false
+        if (!recorder.start()) {
+            _events.tryEmit(R.string.chat_voice_record_failed)
+            return false
+        }
+        _voiceRecording.value = VoiceRecording(elapsedMs = 0L, amplitude = 0f, locked = locked)
+        recordingTicker?.cancel()
+        recordingTicker =
+            viewModelScope.launch {
+                while (true) {
+                    delay(VOICE_TICK_MS)
+                    val elapsed = recorder.elapsedMs()
+                    // Stop cleanly at the cap rather than letting the recorder run on: the note is still
+                    // staged, so a user who talks past five minutes keeps what they said instead of losing it.
+                    if (elapsed >= VoiceRecorder.MAX_DURATION_MS) {
+                        stopVoiceRecordingAndStage()
+                        return@launch
+                    }
+                    _voiceRecording.value =
+                        _voiceRecording.value?.copy(elapsedMs = elapsed, amplitude = recorder.amplitude())
+                }
+            }
+        return true
+    }
+
+    /** Switches an in-progress hold-to-talk recording to hands-free; the user slid up off the button. */
+    fun lockVoiceRecording() {
+        _voiceRecording.value = _voiceRecording.value?.copy(locked = true)
+    }
+
+    /**
+     * Ends the recording and stages it for review, exactly as a picked photo is staged — so the user hears
+     * it back before sending, and can still add text or a reply quote to it.
+     *
+     * A recording too short to have said anything is discarded rather than staged: releasing the button by
+     * accident is common, and an unsendable 0.2 s blip in the composer is worse than nothing happening.
+     */
+    fun stopVoiceRecordingAndStage() {
+        if (_voiceRecording.value == null) return
+        recordingTicker?.cancel()
+        recordingTicker = null
+        _voiceRecording.value = null
+        // Decide on the *elapsed time* before touching the recorder. A press too short to have encoded a
+        // frame is the common fumble, and taking it through stop() is what made it look like a hardware
+        // failure: MediaRecorder.stop() throws a bare RuntimeException when the encoder produced nothing,
+        // so a tap logged a scary warning and toasted "couldn't record". Cancelling instead resets the
+        // recorder cleanly and says the one useful thing — hold the button.
+        val tooShort = recorder.elapsedMs() < MIN_VOICE_MS
+        if (tooShort) {
+            recorder.cancel()
+            _events.tryEmit(R.string.chat_voice_too_short)
+            return
+        }
+        viewModelScope.launch {
+            val bytes = recorder.stop()
+            if (bytes == null) {
+                _events.tryEmit(R.string.chat_voice_record_failed)
+                return@launch
+            }
+            // Second gate, on the bytes rather than the clock: the encoder can lag the button, so a press
+            // held just past the threshold may still have produced less audio than it looked like.
+            // durationMs is pure header arithmetic, so this costs nothing.
+            if ((VoiceAudio.durationMs(bytes) ?: 0) < MIN_VOICE_MS) {
+                _events.tryEmit(R.string.chat_voice_too_short)
+                return@launch
+            }
+            when (val result = attachments.ingestVoice(bytes)) {
+                is AttachmentStore.IngestResult.Success -> {
+                    // The description rides on the staged attachment itself: the review row reads it from
+                    // there, and MeshManager writes it onto the row it creates, against the (possibly
+                    // ciphertext) hash that row will actually hold.
+                    _pendingAttachment.value = result.ingested
+                }
+
+                is AttachmentStore.IngestResult.Failed -> {
+                    _events.tryEmit(R.string.chat_voice_record_failed)
+                }
+            }
+        }
+    }
+
+    /** Abandons an in-progress recording — the user slid to cancel. Nothing is ingested, so there's no GC. */
+    fun cancelVoiceRecording() {
+        recordingTicker?.cancel()
+        recordingTicker = null
+        _voiceRecording.value = null
+        recorder.cancel()
+    }
+
+    /** Plays (or pauses, when it's already the loaded note) the voice note stored under [hash]. */
+    fun playVoice(
+        hash: String,
+        key: String?,
+    ) = voicePlayer.play(hash, key)
+
+    /** Scrubs the loaded voice note to [positionMs]; ignored unless [hash] is the note that is loaded. */
+    fun seekVoice(
+        hash: String,
+        positionMs: Int,
+    ) = voicePlayer.seek(hash, positionMs)
+
+    /**
+     * Discards the staged attachment; its blob (ingested on pick or on finishing a recording) is GC'd unless
+     * a sent message references it. A staged voice note's description rides on the attachment itself, so it
+     * goes with it — nothing separate to clear.
+     */
+    fun clearAttachment() {
+        val pending = _pendingAttachment.value ?: return
+        _pendingAttachment.value = null
+        // Removing a card is a decision about this draft: the same link is not fetched again until the draft
+        // is emptied or sent, and a fetch still running for it is cancelled by the epoch bump.
+        pending.link?.let { card ->
+            dismissedUrl = card.url
+            draftEpoch.value++
+        }
+        viewModelScope.launch { blobs.deleteIfUnreferenced(pending.hash) }
+    }
+
+    /**
+     * A held video's plaintext, for the player (ADR 2026-10.hmfe): read and decrypted into memory like a voice
+     * note's, never staged as a file. Null when the blob is gone or does not open.
+     */
+    suspend fun videoBytes(
+        hash: String,
+        key: String?,
+    ): ByteArray? {
+        val raw = blobs.bytes(hash) ?: return null
+        if (key == null) return raw
+        return withContext(Dispatchers.Default) { AttachmentCrypto.open(raw, b64d(key)) }
+    }
+
+    /** Saves a held video to `Movies/Knit` (ADR 2026-10.hmfe), the video half of [saveAttachment]. */
+    fun saveVideo(
+        hash: String,
+        key: String?,
+        mime: String?,
+    ) {
+        viewModelScope.launch {
+            val bytes = videoBytes(hash, key)
+            val ok = bytes != null && gallerySaver.saveToMovies(bytes, hash, mime ?: "video/mp4")
+            _events.tryEmit(if (ok) R.string.chat_video_saved else R.string.chat_video_save_failed)
+        }
+    }
+
+    /**
+     * Exports the attachment blob [hash] to the public `Pictures/Knit` folder and toasts the result.
+     *
+     * [key] and [mime] come from the message row the user tapped, which is exactly what
+     * [app.getknit.knit.ui.image.BlobFetcher] takes to render that bubble — so what gets saved is what is
+     * on screen, by construction. Both matter:
+     *
+     * - A DM/group attachment's stored blob is `iv || ciphertext` ([AttachmentCrypto]), content-addressed
+     *   by the *ciphertext* hash, so it has to be opened before it leaves the app. Without [key] this
+     *   wrote 300 KB of ciphertext into the gallery under an image mime and reported success.
+     * - `blobs.mime` describes those stored (ciphertext) bytes and is only ever as good as whatever named
+     *   the blob when it landed — since ADR 035 a fetcher default on the spool path rather than the frame.
+     *   The row's mime is the plaintext's own type; the blob row is just the fallback.
+     */
+    fun saveAttachment(
+        hash: String,
+        key: String?,
+        mime: String?,
+    ) {
+        viewModelScope.launch {
+            val raw = blobs.bytes(hash)
+            val bytes = if (key != null && raw != null) AttachmentCrypto.open(raw, b64d(key)) else raw
+            if (key != null && bytes != null) identities.notePlain(hash, bytes)
+            val type = mime ?: blobs.mimeFor(hash)
+            val ok = bytes != null && type != null && gallerySaver.saveToPictures(bytes, hash, type)
+            _events.tryEmit(if (ok) R.string.chat_image_saved else R.string.chat_image_save_failed)
+        }
+    }
+
+    /**
+     * The user's "Tap to download" on a large attachment only Bluetooth could bring (ADR 2026-10.js2p): recorded on
+     * the message rows by the mesh, which then fetches it over any plane. The card gives way to the progress ring
+     * once bytes arrive, and to the bubble once they land.
+     */
+    fun downloadAttachment(hash: String) {
+        viewModelScope.launch { meshManager.downloadAttachment(hash) }
+    }
+
+    /**
+     * A tap on a received file's bubble. A file saved before opens straight from that copy; one never saved,
+     * or whose copy has since been moved or deleted, goes to the storage picker through [saveNeeded], and
+     * [saveAttachmentTo] opens it once written (ADR 2026-09.7ad3). A risky file ([FileTypes.isRisky]) never
+     * comes here — the screen asks first and saves it, and nothing opens it.
+     */
+    fun openAttachment(pending: PendingSave) {
+        viewModelScope.launch {
+            val copy = blobs.savedCopy(pending.hash)?.toUri()
+            if (copy != null) {
+                if (withContext(Dispatchers.IO) { context.contentResolver.documentExists(copy) }) {
+                    _savedFiles.tryEmit(
+                        SavedFile(copy, pending.mime ?: withContext(Dispatchers.IO) { context.contentResolver.typeOf(copy) }),
+                    )
+                    return@launch
+                }
+                blobs.forgetSavedCopy(pending.hash)
+            }
+            _saveNeeded.tryEmit(pending)
+        }
+    }
+
+    /**
+     * Writes a received **file** attachment to the document [dest] the user just picked, decrypting it on the
+     * way exactly as [saveAttachment] does, then remembers the copy and asks the screen to open it (ADR
+     * 2026-09.7ad3).
+     *
+     * Knit never hands another app a file *from the blob store*: that would need a content provider serving
+     * decrypted bytes, and ADR 029's invariant — attachment plaintext lives in the encrypted blob store and
+     * nowhere else — is worth more than the convenience. Through the storage picker the bytes go straight from
+     * the blob into the stream the user chose, still never landing in our own storage. What gets opened, now
+     * and on every later tap, is that copy, the user's own, served by the provider that holds it under a read
+     * grant Knit persists — the same hand-off the direct-transfer card makes. A risky file
+     * ([FileTypes.isRisky]) is saved and left there: nothing on the device can look inside it, and an app
+     * package must never reach an installer through us.
+     */
+    fun saveAttachmentTo(
+        pending: PendingSave,
+        dest: Uri,
+    ) {
+        viewModelScope.launch {
+            val ok =
+                withContext(Dispatchers.IO) {
+                    val raw = blobs.bytes(pending.hash)
+                    val bytes =
+                        if (pending.key != null && raw != null) AttachmentCrypto.open(raw, b64d(pending.key)) else raw
+                    if (pending.key != null && bytes != null) identities.notePlain(pending.hash, bytes)
+                    bytes != null &&
+                        runCatching {
+                            context.contentResolver.openOutputStream(dest)?.use { it.write(bytes) } != null
+                        }.getOrDefault(false)
+                }
+            _events.tryEmit(if (ok) R.string.chat_file_saved else R.string.chat_file_save_failed)
+            if (!ok || FileTypes.isRisky(pending.mime, pending.name)) return@launch
+            // Without the persisted grant the URI works until this process dies; the next tap then finds it
+            // unreadable, forgets it and asks again, so a refused take costs one prompt and nothing else.
+            runCatching { context.contentResolver.takePersistableUriPermission(dest, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+            blobs.rememberSavedCopy(pending.hash, dest.toString(), System.currentTimeMillis())
+            _savedFiles.tryEmit(SavedFile(dest, pending.mime ?: withContext(Dispatchers.IO) { context.contentResolver.typeOf(dest) }))
+        }
+    }
+
+    /** A message's text was copied to the clipboard; surface the confirmation toast. */
+    fun onMessageCopied() {
+        _events.tryEmit(R.string.chat_message_copied)
+    }
+
+    /**
+     * Reads one more page of history, for a reader who has scrolled to the oldest loaded message.
+     *
+     * Grows from the limit the *rendered* window was fetched with, not from [windowLimit], so the window
+     * advances exactly one page per call and calls arriving while a page is still in flight are absorbed
+     * rather than stacking — the screen drives this from a `snapshotFlow` over the visible range, and Room
+     * answers asynchronously. (The screen's own latch is what keeps one fling to one page; this keeps the
+     * two from compounding.)
+     */
+    fun loadOlder() {
+        val window = windowed.value ?: return
+        if (window.messages.size < window.limit) return // the whole thread is already loaded
+        windowLimit.compareAndSet(window.limit, (window.limit + ChatWindow.PAGE).coerceAtMost(ChatWindow.MAX))
+    }
+
+    /**
+     * Grows the window until [messageId] is inside it, for a tapped reply quote whose original is older than
+     * anything loaded. One query rather than paging blindly toward it: [MessageRepository.depthOf] answers
+     * how deep the message sits from the newest end, which is exactly the window that reaches it.
+     *
+     * A message that is no longer stored — retention trimmed it — reports depth 0 and is left alone, which
+     * keeps the screen's existing behaviour of quietly ignoring a quote it cannot follow.
+     */
+    fun revealMessage(messageId: String) {
+        viewModelScope.launch {
+            val depth = messages.depthOf(conversationId, messageId)
+            if (depth <= 0) return@launch
+            windowLimit.update { current -> maxOf(current, depth.coerceAtMost(ChatWindow.MAX)) }
+        }
+    }
+
+    /** Chat is on screen: suppress this conversation's notifications and clear any active one (the user is reading). */
+    fun onChatForeground() {
+        chatForeground.value = true
+        notifier.setVisibleConversation(conversationId)
+        resumeLocation()
+    }
+
+    /** Chat left the screen: resume notifying for this conversation's incoming messages. */
+    fun onChatBackground() {
+        chatForeground.value = false
+        notifier.setVisibleConversation(null)
+        pauseLocation()
+    }
+
+    // Wall clock of the last typing cue we sent, so we throttle to at most one per TYPING_SEND_INTERVAL_MS
+    // while the user edits (see onUserTyping). Main-thread-confined (the screen's snapshotFlow collector).
+    private var lastTypingSentAt = 0L
+
+    /**
+     * The user changed the (non-empty) draft: emit a best-effort "now typing" cue, throttled to at most one per
+     * [TYPING_SEND_INTERVAL_MS] and only while the chat is foregrounded. Fires immediately on the first keystroke
+     * after an idle gap (the throttle window has elapsed), so the indicator appears promptly on the other side.
+     * Cheap and fire-and-forget — the screen may call this on every keystroke, with the field's [text].
+     */
+    fun onUserTyping(text: String) {
+        // Never in the bridged room: there is nobody on the far side to show a cue to, and the frame it would
+        // mint carries no room of its own, so `MeshManager.sendTyping` would publish it as a *Nearby* cue.
+        // Nor in a commons: its scope carries no typing frame (§7.4), and the same Nearby misroute would follow.
+        if (isBridged || isCommons) return
+        // The restore is not a keystroke: the screen's collector reports the stored draft being put back the
+        // same way it reports a typed character, and a cue for it shows the peer "typing…" with nothing to
+        // follow. The first report past it is the user, and from then on every one is.
+        if (text == restored) return
+        restored = null
+        val now = System.currentTimeMillis()
+        if (!chatForeground.value || now - lastTypingSentAt < TYPING_SEND_INTERVAL_MS) return
+        lastTypingSentAt = now
+        viewModelScope.launch { meshManager.sendTyping(conversationId) }
+    }
+
+    /**
+     * Releases the microphone and silences playback when the chat goes away. The recorder holds an exclusive
+     * system resource that no other app can take back, so an abandoned recording must not outlive the screen
+     * that started it; playback stops because a voice note continuing to sound from a thread the user has
+     * navigated away from reads as a bug, not a feature.
+     */
+    override fun onCleared() {
+        recordingTicker?.cancel()
+        recorder.cancel()
+        voicePlayer.stop()
+        locationJob?.cancel()
+    }
+
+    private companion object {
+        /** How long the draft must rest on a link before its card is fetched. */
+        const val PREVIEW_DEBOUNCE_MS = 600L
+
+        /** How long the draft must rest before its language is read for the translate hint (ADR 2026-10.t2h6). */
+        const val DRAFT_READ_MS = 600L
+
+        /** The most a send waits for its link's card ([attachmentForSend]); a slower site sends the text alone. */
+        const val SEND_CARD_HOLD_MS = 5_000L
+
+        /** Send a typing cue at most this often while actively editing (< the receiver's ~12 s hold, so a peer
+         *  who keeps typing re-cues before their indicator would expire). */
+        const val TYPING_SEND_INTERVAL_MS = 8_000L
+
+        /** Recording UI refresh — fast enough for a level meter to look live, slow enough to stay cheap. */
+        const val VOICE_TICK_MS = 60L
+
+        /** How often an open chat re-asks which call to put first: a route or a neighbour can come or go meanwhile. */
+        const val MESH_CALL_RECHECK_MS = 5_000L
+
+        /**
+         * Shortest voice note worth staging. Below this it is a fumbled press rather than speech, and
+         * discarding it silently beats leaving an unsendable blip in the composer.
+         */
+        const val MIN_VOICE_MS = 700
+    }
+}
+
+/** What a chat's other people declared reading (ADR 2026-10.t2h6): [name] is the peer's, in a one-to-one chat. */
+data class DeclaredReaders(
+    val lang: TranslateLang,
+    val name: String?,
+)
+
+/**
+ * The composer's suggestion: [direction] from the draft's language into the chat's, [declared] when the chat's people
+ * said what they read (by [by], the peer's name, in a one-to-one chat) rather than the words said what they write.
+ */
+data class DraftHint(
+    val direction: TranslateDirection,
+    val declared: Boolean = false,
+    val by: String? = null,
+)
+
+/**
+ * Every translation this process holds, every model's state, Content filtering's switch and the reader's language
+ * (ADR 2026-10.t2h6).
+ */
+data class TranslateView(
+    val translations: Map<String, MessageTranslation>,
+    val models: Map<TranslateDirection, SttModelState>,
+    val filterOn: Boolean,
+    val reader: TranslateLang? = null,
+)
+
+// The translation kept on [this] row, or null when there is none (or a half-written one, which nothing writes).
+private fun MessageEntity.storedTranslation(): StoredTranslation? {
+    val text = translation ?: return null
+    val from = translationFrom ?: return null
+    val to = translationTo ?: return null
+    return StoredTranslation(text, TranslateLang(from), TranslateLang(to), translationFlagged, translationGuessed)
+}
+
+/**
+ * The voice bubbles' speech offer (ADR 2026-10.am8d): where the shared model stands, each note asked for in this
+ * process by its attachment hash, and what the model's download costs.
+ */
+data class VoiceSpeechView(
+    val model: SttModelState,
+    val notes: Map<String, NoteStt>,
+    val modelBytes: Long,
+)

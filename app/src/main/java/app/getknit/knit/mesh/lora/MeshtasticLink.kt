@@ -1,0 +1,506 @@
+package app.getknit.knit.mesh.lora
+
+import app.getknit.knit.mesh.crypto.XeddsaVerify
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+
+/**
+ * What [app.getknit.knit.mesh.lora.LoraMeshTransport] consumes: a managed link to one Meshtastic board.
+ * The link owns connection lifecycle (dial, bond-on-demand, the config handshake, the keep-alive
+ * heartbeat, and reconnect-with-backoff), surfaces inbound packets and back-pressure evidence, and
+ * accepts one packet at a time to send. **Pacing is the transport's job** — the link never sleeps
+ * between sends; it only reports what the board tells it (`queue` free/maxlen, `Busy`, NAKs).
+ *
+ * Implemented by [MeshtasticSession] (pure, over the [MeshtasticGattDialer] seam).
+ */
+internal interface MeshtasticLink {
+    val state: StateFlow<LinkState>
+
+    /** Inbound mesh packets, already decoded; `tryEmit`ted like the radio transports' `_inbound`. */
+    val packets: SharedFlow<ReceivedPacket>
+
+    /**
+     * What became of a packet after [send] returned, keyed by the handle [SendResult.Queued.id]: a late refusal (a
+     * duty-cycle NAK), and for a [LinkDestination.Direct] send the destination's answer — [PacketOutcome.Acked],
+     * [PacketOutcome.Unreachable] once the firmware gave up retrying, or [PacketOutcome.Refused] by the destination's
+     * own board. A link may also report [PacketOutcome.NoOutcome] for a direct send it stopped waiting on (MeshCore
+     * reports only a confirmation, never a failure); the Meshtastic session never does, and the transport keeps its
+     * own deadline either way (ADR 2026-10.x9fa).
+     */
+    val outcomes: SharedFlow<PacketOutcome>
+
+    /** The board's transmit-queue headroom from the latest `queueStatus`; null until first reported. */
+    val queue: StateFlow<QueueInfo?>
+
+    /**
+     * The board's own battery, from its `NodeInfo` in the handshake and the device telemetry it sends the
+     * phone about once a minute; null until reported and again once the link is stopped. Kept out of [state]
+     * so it doesn't churn the state on every packet.
+     */
+    val battery: StateFlow<BoardBattery?>
+
+    /**
+     * The board's own air readings, from its live self-telemetry about once a minute — never the handshake's `NodeInfo`,
+     * whose `device_metrics` can be hours old; null until reported and again once the link is stopped or re-handshakes.
+     * Each reading is a distinct value ([BoardAir.atMs]), so a repeat of the same figures still reads as fresh. The
+     * transport's shared-band brake reads [BoardAir.channelUtilPercent] (ADR 2026-10.ug4a); [BoardAir.airUtilTxPercent]
+     * is diagnostics only — see [BoardAir].
+     */
+    val boardAir: StateFlow<BoardAir?>
+
+    /**
+     * What the mesh's other nodes call themselves, keyed by node number — the board's NodeDB as it streams in
+     * the handshake and stays current through `NODEINFO_APP` broadcasts. Only the Meshtastic room reads it, to
+     * put a name on a heard post instead of a bare node number.
+     *
+     * Its own flow rather than a field on [LinkState.Ready], because a busy mesh pushes NODEINFO constantly and
+     * folding it into the link state would re-emit the whole state — and every collector of it — each time.
+     * Bounded and lossy by design: a fixed working set, oldest evicted, cleared with the link. A post whose
+     * author is not in it renders as its `!hex` id, which is what a stock client shows too.
+     */
+    val nodes: StateFlow<Map<UInt, BoardOwner>>
+
+    /**
+     * The `User` the board last streamed for [node] — its NodeDB entry pushed in the handshake or on change, or the
+     * node's own `NODEINFO_APP` broadcast — exactly as sent, stamped with when ([StreamedUser.seq]), or null when it has
+     * streamed none in this working set (bounded like [nodes], nameless entries kept). **Not the board's NodeDB:** the
+     * firmware never says when it drops a node (`--remove-node`, eviction, a reset), and an over-the-air NodeInfo can be
+     * anybody's. So an `add_contact` reads a key here only when it was streamed after the refused send was issued (the
+     * race the board's own `39` cannot see), and otherwise only the names (ADR 2026-10.aajj).
+     */
+    fun nodeUser(node: UInt): StreamedUser?
+
+    /** The stamp the next [nodeUser] entry will be past: read just before a send, it orders the stream against it. */
+    fun userSeq(): Long
+
+    /**
+     * Enqueues one packet on the board. Returns synchronously once the board takes (or refuses) it; a taken packet's
+     * [SendResult.Queued.id] is the handle its later [outcomes] carry.
+     *
+     * [destination] is [LinkDestination.Broadcast] for the room and every Knit broadcast. A [LinkDestination.Direct]
+     * send is addressed to one board: the DM auto-reply ([DmAutoReplyPolicy]) unacknowledged on channel 0, a compact DM
+     * (ADR 2026-10.x9fa) acknowledged on the Knit secondary — both PKI-encrypted by firmware 2.8 to the destination's
+     * key, and refused with `queueStatus.res = 39` when the board holds none (`Router::perhapsEncode`) — and an
+     * `add_contact` (`PORT_ADMIN`, unacknowledged) to our own board, which handles it before that `queueStatus`
+     * (ADR 2026-10.aajj).
+     */
+    suspend fun send(
+        payload: ByteArray,
+        channelIndex: Int,
+        portnum: Int = MeshtasticProto.PORT_PRIVATE_APP,
+        hopLimit: Int? = null,
+        destination: LinkDestination = LinkDestination.Broadcast,
+    ): SendResult
+
+    /**
+     * Sets the board up for Knit ([spec]), or puts it back the way it was ([ProvisionMode.Restore]). The
+     * board typically reboots to apply the edit; the link rides that out (it re-handshakes) — the result is
+     * returned as soon as the write is accepted, before the reboot.
+     */
+    suspend fun provisionChannel(spec: ProvisionSpec): ProvisionResult
+
+    /** (Re)connects to [address], retrying with backoff while started. Idempotent for the same address. */
+    fun start(address: String)
+
+    fun stop()
+}
+
+/** The channel name + PSK to write, and which direction to write it. */
+internal data class ProvisionSpec(
+    val name: String,
+    val psk: ByteArray,
+    val mode: ProvisionMode = ProvisionMode.Setup,
+    /**
+     * The board's own intervals and name as recorded when it was set up. [ProvisionMode.Restore] writes them
+     * back; [ProvisionMode.Setup] carries them forward untouched when all it has left to do is the rename.
+     */
+    val previous: BoardSettings? = null,
+)
+
+/**
+ * What a user can do to a board (ADR 045). In a release build there are deliberately **two**, and no middle
+ * setting: a board is either set up for Knit or it is a stock Meshtastic node, so any two Knit boards are
+ * configured identically and meet without coordination.
+ *
+ * [SetupDedicated] is the opt-in third (ADR 067), and it is a different bargain rather than a lighter
+ * one — see its doc. Both setups produce the same channel table; they differ only in whether the radio is
+ * pinned off the shared public slot, [SetupShared] moves a pinned board back without undoing the setup, and
+ * [Restore] undoes either.
+ */
+internal enum class ProvisionMode {
+    /**
+     * Set the board up for Knit: the Knit channel goes into a free **secondary** slot — the primary, and so
+     * the RF slot the firmware hashes out of its name, is left alone on purpose (ADR 045) — the board is
+     * renamed for Knit ([BoardName], ADR 049), and its housekeeping broadcasts are quieted ([BoardQuiet]).
+     */
+    Setup,
+
+    /**
+     * [Setup], plus `lora.channel_num` pinned to the slot [LoraSlot] derives for the board's region and
+     * preset — so the fleet has the frequency to itself and `LoraAirtime` drops the politeness ceiling
+     * (ADR 067). Never the default: it trades away the free relaying a stock
+     * Meshtastic neighbourhood does for us, which is worth having wherever there is a neighbourhood. Where
+     * there is not — an isolated farm, a mountain house — there is nothing to trade away and a household
+     * fleet gets its region's whole duty cycle instead of a tenth of it.
+     *
+     * Refused as [ProvisionResult.NoDedicatedSlot] when Knit will not place a slot in the board's region.
+     */
+    SetupDedicated,
+
+    /**
+     * [Setup], with `lora.channel_num` put back to the slot the board had before [SetupDedicated] pinned it
+     * — the recorded prior, which is the shared public slot on every board the user never pinned by hand.
+     * The Knit channel, the name and the quieting stay exactly as they are, so this is the one-step way off a
+     * dedicated slot that does not go through [Restore] and a second setup; a no-op on a board that is already where it would be put.
+     */
+    SetupShared,
+
+    /**
+     * Undoes either setup: the Knit channel is disabled, the board's own intervals and name come back, and
+     * `lora.channel_num` goes back to what the board had — which for a board Knit pinned is 0, the firmware
+     * deriving its slot from the primary's name again.
+     */
+    Restore,
+}
+
+/** The outcome of [MeshtasticLink.provisionChannel]. */
+internal sealed interface ProvisionResult {
+    /** The Knit channel is at [index] (freshly written, or [alreadyPresent] and left as-is); bind the plane to it. */
+    data class Provisioned(
+        val index: Int,
+        val alreadyPresent: Boolean,
+        /**
+         * The housekeeping intervals and the name the board had *before* the write, for the caller to
+         * persist — without them a restore can only offer the firmware's defaults, not the user's own. Null
+         * when nothing was written, so a re-run never overwrites the record with the quieted values. A board
+         * that only needed the rename ([alreadyPresent]) reports the caller's own record with the old name
+         * filled in, since that is the one moment the old name is still knowable.
+         */
+        val previous: BoardSettings? = null,
+    ) : ProvisionResult
+
+    /** Every secondary slot (1..7) is already taken by a different channel; the user must free one. */
+    data object NoFreeSlot : ProvisionResult
+
+    /**
+     * [ProvisionMode.SetupDedicated] on a board whose region Knit will not place a dedicated RF slot in —
+     * an unknown band, or one with no room to move ([LoraSlot.forRegion]). Nothing was written: picking the
+     * frequency ourselves is only safe where the band is known exactly, so the refusal is the feature.
+     */
+    data class NoDedicatedSlot(
+        val region: LoraRegion,
+    ) : ProvisionResult
+
+    /** The board is a stock Meshtastic node again; it carries no Knit channel, so the plane has nowhere to send. */
+    data object Restored : ProvisionResult
+
+    /** The board never accepted the write (e.g. it kept rejecting the admin session key). */
+    data class Failed(
+        val reason: String,
+    ) : ProvisionResult
+
+    /** The link wasn't [LinkState.Ready] when asked. */
+    data class NotReady(
+        val state: LinkState,
+    ) : ProvisionResult
+}
+
+/** The link's lifecycle. Terminal states ([NeedsPairing], [StaleBond]) stop retrying until [MeshtasticLink.start]. */
+internal sealed interface LinkState {
+    data object Idle : LinkState
+
+    data object Connecting : LinkState
+
+    /** The stack is pairing (the board is showing its PIN); the first protected op waits this out. */
+    data object Bonding : LinkState
+
+    data class Handshaking(
+        val board: BoardInfo?,
+    ) : LinkState
+
+    data class Ready(
+        val board: BoardInfo,
+        val channels: List<ChannelInfo>,
+        val mtu: Int,
+        /** The board's region + modem preset, once its config stream reported them; null on older firmware. */
+        val radio: LoraRadioConfig? = null,
+        /**
+         * `SecurityConfig.packet_signature_policy` off this session's handshake (#243), or null when it streamed no
+         * security config — unknown, which `LoraAirtime.price` reads as signing. Never the keys beside it.
+         */
+        val signaturePolicy: SignaturePolicy? = null,
+    ) : LinkState
+
+    data class Disconnected(
+        val reason: String,
+        val retryAtMs: Long,
+        val streak: Int,
+    ) : LinkState
+
+    /** The adapter is off (or absent) — nothing to do but wait for the user to turn Bluetooth on. */
+    data object Unavailable : LinkState
+
+    /** The board is bonded-away or never paired — the user must pair it in the picker; retries stop. */
+    data class NeedsPairing(
+        val address: String,
+    ) : LinkState
+
+    /** A stale bond the stack keeps rejecting — the user must forget the device in Settings and re-pair. */
+    data class StaleBond(
+        val address: String,
+    ) : LinkState
+}
+
+/** Identity of the connected board, learned from `my_info`/`metadata` during the handshake. */
+internal data class BoardInfo(
+    val myNodeNum: UInt,
+    val pioEnv: String?,
+    val firmwareVersion: String?,
+    /**
+     * What the board calls itself on the mesh, off its own `NodeInfo` in the handshake — the name on its
+     * screen and in every other radio's node list. Null on firmware that never sends its own entry, which
+     * the setup screen reads as "no reason to think it needs renaming".
+     */
+    val owner: BoardOwner? = null,
+    /**
+     * `DeviceMetadata.has_xeddsa` — the build can sign and verify XEdDSA. Not whether it signs: a 2.8.2 build under
+     * `COMPATIBLE` reports true and signs nothing (#243); the airtime governor reads it beside the version and
+     * [LinkState.Ready.signaturePolicy]. Null on firmware too old to say.
+     */
+    val hasXeddsa: Boolean? = null,
+    /**
+     * `User.is_licensed` on the board's own entry — ham mode: it does no PKI, so a compact DM from it can never draw a
+     * `39` (ADR 2026-10.aajj), and its unicasts are signed by the firmware's rule instead (#243, `LoraAirtime.price`).
+     */
+    val licensed: Boolean = false,
+)
+
+/**
+ * One board on the air, as the link addresses it (ADR 2026-10.x9fa). Opaque above the link on purpose: a Meshtastic
+ * board is its 32-bit node number, and a MeshCore board will be a public-key prefix — nothing in the transport may
+ * read the number, only compare and hand the address back.
+ */
+@JvmInline
+internal value class BoardAddr(
+    val node: UInt,
+)
+
+/**
+ * Where one packet goes: the whole channel, or one board. Not the pacer's `Destination`, which says which *channel*
+ * a queued frame is written to and which guard it passes; this is the link's addressing alone.
+ */
+internal sealed interface LinkDestination {
+    /** Every board on the channel — the room, a Knit broadcast. */
+    data object Broadcast : LinkDestination
+
+    /**
+     * One board. [ack] asks its board to acknowledge (`want_ack`): the firmware retries until it does or gives up,
+     * and the outcome arrives on [MeshtasticLink.outcomes]. The DM auto-reply is direct without it.
+     */
+    data class Direct(
+        val addr: BoardAddr,
+        val ack: Boolean = true,
+    ) : LinkDestination
+}
+
+/** A `User` the board streamed for a node, and its place in the stream ([MeshtasticLink.userSeq]). */
+internal class StreamedUser(
+    val user: BoardOwnerRaw,
+    val seq: Long,
+)
+
+/** One inbound packet the board handed the phone. */
+internal class ReceivedPacket(
+    val from: UInt,
+    val to: UInt,
+    val id: UInt,
+    val channelIndex: Int,
+    val portnum: Int,
+    val payload: ByteArray,
+    val rxSnr: Float?,
+    val rxRssi: Int?,
+    val hopsAway: Int?,
+    /** `MeshPacket.via_mqtt` — the packet came off an MQTT uplink rather than the air. */
+    val viaMqtt: Boolean = false,
+    /**
+     * `Data.xeddsa_signature` — the sender board's 64-byte XEdDSA signature over the packet and its whole `Data`
+     * envelope (2.8.1's layout, [signedFields]), or null when the packet came unsigned (pre-2.8 firmware, or past the signature cliff).
+     * Verified on the phone against the key a contact's profile advertises (`mesh/crypto/XeddsaVerify`).
+     */
+    val signature: ByteArray? = null,
+    /**
+     * The rest of the `Data` envelope firmware 2.8.1 signs beside [to] (`MeshData.signedFields`), as decoded: the
+     * signature is checked over these.
+     */
+    val signedFields: XeddsaVerify.DataFields? = null,
+    /**
+     * `MeshPacket.xeddsa_signed` — our own board already verified [signature] against the key *its* NodeDB
+     * holds for [from]. Evidence that the radio which has been using that number sent this, and no more:
+     * the board's key is learned off the air, never from a Knit profile.
+     */
+    val boardVerified: Boolean = false,
+    /**
+     * `MeshPacket.rx_time` in epoch **seconds** by the receiving board's clock, or null when it has none. Old against
+     * the phone's wall clock means the board heard it a while ago and is only now handing it over — its to-phone queue
+     * replayed at reconnect — which the hearing hook must not take as the radio being there now (ADR 2026-10.x9fa).
+     */
+    val rxTime: UInt? = null,
+    /**
+     * `MeshPacket.want_ack`, [hopLimit] and `MeshPacket.next_hop` ([nextHop], a node's last byte, 0 for none) as the
+     * board received them: together they say whether our board ACKed a unicast to it on our behalf
+     * ([LoraDirectPolicy.boardAcks]), which is air the window owes (ADR 2026-10.x9fa).
+     */
+    val wantAck: Boolean = false,
+    val hopLimit: Int = 0,
+    val nextHop: Int = 0,
+    /**
+     * `MeshPacket.pki_encrypted`: the board PKI-decrypted it and reports it on index 0, as every compact DM from a 2.8
+     * board arrives (ADR 2026-10.x9fa's PKI amendment). Read by nothing that decides; the opener names the sender.
+     */
+    val pkiEncrypted: Boolean = false,
+)
+
+/**
+ * What the board says about the air, off its own `DeviceMetrics`. **Not comparable to `LoraAirtime`'s ledger
+ * without saying so**, and the pair is worth keeping straight: [airUtilTxPercent] is every packet this radio
+ * sent over the last **hour**, relays of other people's traffic and the board's own broadcasts included, while the
+ * governor tracks what Knit handed the board over the last **fifteen minutes**. Reading one as the other is what made
+ * a quiet plane look like it had leaked airtime — and why it does not seed the ledger after a restart either (ADR
+ * 2026-10.ug4a): converted to a window it over-books a client on a busy mesh by most of an allowance.
+ * [channelUtilPercent] is the band around it over the last **minute** — TX, RX and noise together, our own airings
+ * included (firmware `airtime.h`, six 10 s periods) — which is what the shared-band brake reads.
+ */
+internal data class BoardAir(
+    val channelUtilPercent: Float?,
+    val airUtilTxPercent: Float?,
+    /**
+     * When the session read it, on the session's monotonic clock (`elapsedRealtime`, the transport's too): what makes
+     * every reading a distinct value, so a board reporting the same figures twice is still a board that reported.
+     */
+    val atMs: Long = 0L,
+)
+
+/** The board's transmit-queue headroom. */
+internal data class QueueInfo(
+    val free: Int,
+    val maxlen: Int,
+    val atMs: Long,
+)
+
+/**
+ * One radio's last-heard signal quality, surfaced for the diagnostics/settings row. Owned by
+ * [LoraMeshTransport] and keyed per radio, **not** by the link: the link sees the whole air — strangers on
+ * the board's public primary channel, and the NodeDB replay the firmware sends at every handshake — and only
+ * the transport knows which channel this plane is bound to. [atMs] is what ages a reading out with its radio.
+ */
+internal data class RxQuality(
+    val snr: Float?,
+    val rssi: Int?,
+    val atMs: Long,
+) {
+    /**
+     * This reading refreshed by a newer packet from the same radio. A field absent from [next] keeps the
+     * value it had rather than blanking the row: a reception always proves the radio is there and when, and
+     * usually — but not always — carries both numbers.
+     */
+    fun refreshedBy(next: RxQuality) = RxQuality(next.snr ?: snr, next.rssi ?: rssi, next.atMs)
+}
+
+/** The synchronous outcome of a [MeshtasticLink.send]. */
+internal sealed interface SendResult {
+    data class Queued(
+        val id: UInt,
+        val queue: QueueInfo,
+    ) : SendResult
+
+    /** The mesh refused the packet immediately (e.g. NO_CHANNEL, TOO_LARGE) — folded in from the drain. */
+    data class Nak(
+        val id: UInt,
+        val reason: RoutingError,
+    ) : SendResult
+
+    /** The board's `queueStatus.res` was non-zero (a firmware error code). */
+    data class Rejected(
+        val id: UInt,
+        val res: Int,
+    ) : SendResult
+
+    /** No headroom (`queue.free == 0`) — nothing was written; the transport paces and retries. */
+    data object Busy : SendResult
+
+    /** Larger than [MeshtasticProto.MAX_PAYLOAD]; refused locally, never written. */
+    data object TooLarge : SendResult
+
+    data class NotReady(
+        val state: LinkState,
+    ) : SendResult
+
+    /**
+     * The write went out but no correlated `queueStatus` came back in time. [id] is the handle the session gave the
+     * packet: the board may have taken it, and a direct send's answer will arrive under it (ADR 2026-10.x9fa).
+     */
+    data class Timeout(
+        val id: UInt,
+    ) : SendResult
+}
+
+/**
+ * What became of a packet after [MeshtasticLink.send] returned, by its handle [id] (ADR 2026-10.x9fa). The board-neutral
+ * minimum a direct DM needs, so a MeshCore board can report the same four answers.
+ */
+internal sealed interface PacketOutcome {
+    val id: UInt
+
+    /**
+     * An acknowledgement for a direct send. [byDestination] true is the destination's own board answering: the packet
+     * reached its radio, which says nothing about its phone. False is an implicit ack — a relay, or our own board,
+     * heard it repeated — which a caller may count and must never take as delivery or as the end of the wait.
+     *
+     * [proof] is our board's verdict on the ack's `Routing.ack_proof` ([AckProof]): [byDestination] is only the ack's
+     * `from`, which anyone holding the channel key can write, so a caller that shows the ack to a person refuses an
+     * [AckProof.INVALID] one. A board that reports nothing reads [AckProof.ABSENT].
+     */
+    data class Acked(
+        override val id: UInt,
+        val byDestination: Boolean,
+        val proof: AckProof = AckProof.ABSENT,
+    ) : PacketOutcome
+
+    /** The firmware retried a direct send and gave up (`MAX_RETRANSMIT`, `NO_RESPONSE`): nothing answered. */
+    data class Unreachable(
+        override val id: UInt,
+    ) : PacketOutcome
+
+    /**
+     * A refusal: [byDestination] true is the destination's board refusing what reached it (a `NO_CHANNEL` after it
+     * was Restored); false is our own board or a relay refusing it (a duty-cycle or rate NAK, a send's late refusal).
+     */
+    data class Refused(
+        override val id: UInt,
+        val reason: RoutingError,
+        val byDestination: Boolean = false,
+    ) : PacketOutcome
+
+    /** The link stopped waiting on a direct send with no answer at all. The transport keeps a deadline of its own too. */
+    data class NoOutcome(
+        override val id: UInt,
+    ) : PacketOutcome
+}
+
+/** The board + channel the LoRa plane is bound to, derived from settings; null means the plane is off. */
+internal data class LoraConfig(
+    val address: String,
+    val channelIndex: Int,
+    /**
+     * Whether our own DMs may ride this plane, as compact unicasts (`SettingsStore.loraDmEnabled`, ADR 2026-10.x9fa);
+     * the room always does. Gates our sends only: a compact DM addressed to us is read whatever this says, since our
+     * board has already acknowledged it.
+     */
+    val dms: Boolean = true,
+    /**
+     * Whether the board's primary (slot 0) channel is mirrored into the Meshtastic room at all
+     * (`SettingsStore.loraRoomEnabled`, ADR 2026-09.26q3). Off, a slot-0 chat packet is dropped where it
+     * lands and a post cannot be put on that channel; Knit's own frames on the bound slot are unaffected.
+     */
+    val room: Boolean = true,
+)
