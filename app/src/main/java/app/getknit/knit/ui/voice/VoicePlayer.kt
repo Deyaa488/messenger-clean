@@ -7,7 +7,7 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.util.Log
 import app.getknit.knit.data.ByteArrayMediaSource
-import app.getknit.knit.data.blob.BlobDao
+import app.getknit.knit.data.BlobRepository
 import app.getknit.knit.mesh.crypto.AttachmentCrypto
 import app.getknit.knit.mesh.crypto.b64d
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +37,7 @@ import kotlinx.coroutines.withContext
  */
 class VoicePlayer(
     context: Context,
-    private val blobs: BlobDao,
+    private val blobs: BlobRepository,
 ) {
     /** The playback state one bubble needs: which note, how far in, and whether it is running. */
     data class Playback(
