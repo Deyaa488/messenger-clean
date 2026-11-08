@@ -192,8 +192,7 @@ class KnitBridge(
         }
 
     private val voiceRecorder = VoiceRecorder(context, scope)
-    private val voicePlayer = VoicePlayer(context, blobs, scope)
-
+    private val voicePlayer = VoicePlayer(context, blobs)
     @Volatile
     private var isDestroyed = false
 
