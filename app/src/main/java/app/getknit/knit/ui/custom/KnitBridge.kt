@@ -46,7 +46,7 @@ import app.getknit.knit.data.VoiceAudio
 import app.getknit.knit.data.decodeOrientedBounded
 import app.getknit.knit.data.group.GroupEntity
 import app.getknit.knit.data.group.GroupMembersStore
-import app.getknit.knit.data.group.groupTitle
+import app.getknit.knit.data.message.groupTitle
 import app.getknit.knit.data.group.toGroupInfo
 import app.getknit.knit.data.message.ConversationKind
 import app.getknit.knit.data.message.Conversations
@@ -54,7 +54,7 @@ import app.getknit.knit.data.message.MessageEntity
 import app.getknit.knit.data.message.PeerRename
 import app.getknit.knit.data.message.StatusNotices
 import app.getknit.knit.data.settings.SettingsStore
-import app.getknit.knit.data.settings.ThemeMode
+import app.getknit.knit.ui.theme.ThemeMode
 import app.getknit.knit.identity.Alias
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.identity.displayNameFor
