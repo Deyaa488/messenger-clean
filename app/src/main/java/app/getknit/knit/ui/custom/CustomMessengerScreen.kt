@@ -17,6 +17,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -48,6 +49,7 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.di.CALLS_WIRED
+import app.getknit.knit.data.settings.ThemeMode
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshService
@@ -368,9 +370,21 @@ fun CustomMessengerScreen(
             webView.destroy()
         }
     }
-
+    val themeMode = settingsStore.themeMode.collectAsStateWithLifecycle().value
+    val isDark = themeMode == ThemeMode.Dark
+    LaunchedEffect(isDark) {
+        (context as? android.app.Activity)?.window?.let { win ->
+            val barColor = if (isDark) android.graphics.Color.parseColor("#0F172A") else android.graphics.Color.WHITE
+            win.statusBarColor = barColor
+            win.navigationBarColor = barColor
+            androidx.core.view.WindowCompat.getInsetsController(win, win.decorView).apply {
+                isAppearanceLightStatusBars = !isDark
+                isAppearanceLightNavigationBars = !isDark
+            }
+        }
+    }
     AndroidView(
         factory = { webView },
-        modifier = Modifier.fillMaxSize().systemBarsPadding().imePadding(),
+        modifier = Modifier.fillMaxSize().background(if (isDark) androidx.compose.ui.graphics.Color(0xFF0F172A) else androidx.compose.ui.graphics.Color.White).systemBarsPadding().imePadding(),
     )
 }
