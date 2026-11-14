@@ -31,6 +31,7 @@ import androidx.core.net.toUri
 import app.getknit.knit.BuildConfig
 import app.getknit.knit.call.CallKind
 import app.getknit.knit.call.CallManager
+import app.getknit.knit.call.CallPhase
 import app.getknit.knit.call.CallRefusal
 import app.getknit.knit.data.AttachmentStore
 import app.getknit.knit.data.AvatarStore
@@ -964,7 +965,7 @@ class KnitBridge(
                         null
                     }
                 val cleanText = text.trim()
-                val safeScale = tinyScale.coerceIn(55, 95)
+                val safeScale = tinyScale.coerceIn(1, 100)
                 val payloadText = if (isTiny) "\u2063TINY:$safeScale\u2063$cleanText" else cleanText
                 
                 val sent =
@@ -1219,6 +1220,7 @@ class KnitBridge(
         )
     }
     @Volatile private var lastPlayingMsgId: String? = null
+    @Volatile private var activeCallId: String? = null
     @Volatile private var lastPlayingHash: String? = null
 
     @JavascriptInterface
@@ -1620,6 +1622,24 @@ class KnitBridge(
         }
     }
 
+    @JavascriptInterface
+    fun acceptVoiceCall() {
+        val calls = callManager ?: return
+        val id = activeCallId ?: calls.state.value?.id ?: return
+        scope.launch {
+            calls.answer(id)
+        }
+    }
+
+    @JavascriptInterface
+    fun declineVoiceCall() {
+        val calls = callManager ?: return
+        val id = activeCallId ?: calls.state.value?.id
+        scope.launch {
+            if (id != null) calls.decline(id, 0) else calls.hangUp()
+        }
+    }
+
     private fun startObservingMeshEvents() {
         scope.launch {
             var activeMsgId: String? = null
@@ -1632,6 +1652,41 @@ class KnitBridge(
                     val endedId = activeMsgId ?: return@collect
                     activeMsgId = null
                     evaluateJs("window.KnitBridge && window.KnitBridge.onVoicePlaybackState && window.KnitBridge.onVoicePlaybackState('${escapeJs(endedId)}', false, 0, 0);")
+                }
+            }
+        }
+        callManager?.let { calls ->
+            scope.launch {
+                var lastPhase: CallPhase? = null
+                var lastCallId: String? = null
+                calls.state.collect { callState ->
+                    if (callState == null) {
+                        if (lastCallId != null || lastPhase != null) {
+                            val endedId = lastCallId ?: activeCallId ?: ""
+                            activeCallId = null
+                            lastPhase = null
+                            lastCallId = null
+                            evaluateJs("if (window.KnitBridge && window.KnitBridge.onCallEvent) window.KnitBridge.onCallEvent('ended', '${escapeJs(endedId)}');")
+                        }
+                        return@collect
+                    }
+                    activeCallId = callState.id
+                    if (callState.phase != lastPhase || callState.id != lastCallId) {
+                        lastPhase = callState.phase
+                        lastCallId = callState.id
+                        val eventName = when (callState.phase) {
+                            CallPhase.Alerting -> "incoming"
+                            CallPhase.Connected -> "connected"
+                            CallPhase.Ended -> "ended"
+                            else -> null
+                        }
+                        if (eventName != null) {
+                            evaluateJs("if (window.KnitBridge && window.KnitBridge.onCallEvent) window.KnitBridge.onCallEvent('$eventName', '${escapeJs(callState.id)}');")
+                        }
+                        if (callState.phase == CallPhase.Ended) {
+                            activeCallId = null
+                        }
+                    }
                 }
             }
         }
@@ -1894,7 +1949,7 @@ class KnitBridge(
 
         val tinyMatch = Regex("^\\u2063TINY:(\\d+)\\u2063(.*)$", RegexOption.DOT_MATCHES_ALL).matchEntire(body)
         val parsedIsTiny = tinyMatch != null
-        val parsedTinyScale = tinyMatch?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(55, 95) ?: 80
+        val parsedTinyScale = tinyMatch?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(1, 100) ?: 80
         val cleanBody = tinyMatch?.groupValues?.get(2) ?: body
         return UiMessage(
             id = id,
@@ -1910,9 +1965,9 @@ class KnitBridge(
             fileSize = attachmentSize ?: 0L,
             duration = voiceDurationMs?.let { (it / 1000).coerceAtLeast(1) } ?: 0,
             replyTo = replyToId,
-            pending = pendingKey,
+            pending = isPending,
             delivered = received,
-            read = received,
+            read = false,
             failed = false,
             reactions = reactionsList,
             isTiny = parsedIsTiny,
