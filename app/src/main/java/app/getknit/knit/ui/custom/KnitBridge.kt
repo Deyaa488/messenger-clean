@@ -1965,7 +1965,7 @@ class KnitBridge(
             fileSize = attachmentSize ?: 0L,
             duration = voiceDurationMs?.let { (it / 1000).coerceAtLeast(1) } ?: 0,
             replyTo = replyToId,
-            pending = isPending,
+            pending = isSentByMe && !received,
             delivered = received,
             read = false,
             failed = false,
