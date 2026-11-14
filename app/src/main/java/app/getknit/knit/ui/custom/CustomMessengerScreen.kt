@@ -49,7 +49,7 @@ import app.getknit.knit.data.PeerRepository
 import app.getknit.knit.data.ReactionRepository
 import app.getknit.knit.data.settings.SettingsStore
 import app.getknit.knit.di.CALLS_WIRED
-import app.getknit.knit.data.settings.ThemeMode
+import app.getknit.knit.ui.theme.ThemeMode
 import app.getknit.knit.identity.Identity
 import app.getknit.knit.mesh.MeshController
 import app.getknit.knit.mesh.MeshService
@@ -370,7 +370,7 @@ fun CustomMessengerScreen(
             webView.destroy()
         }
     }
-    val themeMode = settingsStore.themeMode.collectAsStateWithLifecycle().value
+    val themeMode = settingsStore.themeMode.collectAsStateWithLifecycle(initialValue = ThemeMode.System).value
     val isDark = themeMode == ThemeMode.Dark
     LaunchedEffect(isDark) {
         (context as? android.app.Activity)?.window?.let { win ->
