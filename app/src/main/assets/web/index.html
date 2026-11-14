@@ -468,7 +468,7 @@ body {
 .voice-play:active { transform: scale(0.9); }
 .voice-play svg { width: 16px; height: 16px; }
 
-.voice-wave { flex: 1; display: flex; align-items: center; gap: 2px; height: 24px; }
+.voice-wave { flex: 1; display: flex; align-items: center; gap: 2px; height: 24px; direction: ltr; cursor: pointer; }
 .voice-wave span { flex: 1; background: currentColor; opacity: 0.5; border-radius: 2px; min-height: 4px; }
 .voice-duration { font-size: 11px; opacity: 0.8; }
 
@@ -2130,7 +2130,8 @@ const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set(((
           conv.unread = (conv.unread || 0) + 1;
         }
       }
-      renderAll();
+      conv.messages.sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));          
+       renderAll();
       if (isBrandNew && msg.senderId !== 'me' && !msg.read && !msg.pending && !_notifiedIds.has(String(msg.id)) && Date.now() >= (window._suppressToastUntil || 0) && state.activeConversationId !== conv.id && !conv.muted) { markMsgNotified(msg.id);
         const contact = getContact(conv.contactId);
         showToast((contact ? contact.name : 'رسالة جديدة') + ': ' + previewText(msg).slice(0, 40), 'info', 3000);
@@ -2226,17 +2227,17 @@ const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set(((
     if (event === 'incoming') {
       const peer = getContact(peerId);
       showToast('مكالمة واردة من ' + (peer ? peer.name : 'مجهول'), 'info', 4000);
-      startCall();
+      const overlay = document.getElementById('callOverlay'); if (overlay) { const name = (peer && peer.name) ? peer.name : (peerId || 'Incoming'); const av = document.getElementById('callAvatar'); if (av) { const [c1, c2] = getAvatarGradient(name); av.innerHTML = (peer && peer.avatar) ? '<img src="' + peer.avatar + '" alt=""/>' : escapeHtml(getInitial(name)); av.style.background = (peer && peer.avatar) ? '#eee' : 'linear-gradient(135deg,' + c1 + ',' + c2 + ')'; } document.getElementById('callName').textContent = name; document.getElementById('callStatus').textContent = '\u0645\u0643\u0627\u0644\u0645\u0629 \u0648\u0627\u0631\u062f\u0629...'; document.getElementById('callTimer').textContent = '00:00'; document.getElementById('callTimer').classList.remove('active'); document.getElementById('callMicState').hidden = true; overlay.classList.add('active'); uiState.call = { startTs: null, connected: false, muted: false, speaker: false }; let inc = document.getElementById('callIncomingActions'); if (!inc) { inc = document.createElement('div'); inc.id = 'callIncomingActions'; inc.style.cssText = 'display:flex;gap:16px;justify-content:center;margin-top:16px;'; inc.innerHTML = '<button id="callAcceptBtn" type="button" style="background:#16a34a;color:#fff;border:none;border-radius:999px;padding:10px 22px;font-weight:700;cursor:pointer;">\u0642\u0628\u0648\u0644</button><button id="callDeclineBtn" type="button" style="background:#dc2626;color:#fff;border:none;border-radius:999px;padding:10px 22px;font-weight:700;cursor:pointer;">\u0631\u0641\u0636</button>'; const actions = overlay.querySelector('.call-actions'); if (actions && actions.parentNode) actions.parentNode.insertBefore(inc, actions); else overlay.appendChild(inc); document.getElementById('callAcceptBtn').onclick = () => { if (window.KnitNative && window.KnitNative.acceptVoiceCall) window.KnitNative.acceptVoiceCall(); }; document.getElementById('callDeclineBtn').onclick = () => { if (window.KnitNative && window.KnitNative.declineVoiceCall) window.KnitNative.declineVoiceCall(); inc.hidden = true; endCall(); }; } inc.hidden = false; }
     } else if (event === 'connected') {
       if (uiState.call) {
         uiState.call.connected = true;
         uiState.call.startTs = now();
         document.getElementById('callStatus').textContent = 'متصل (Wi-Fi Direct)';
-        document.getElementById('callTimer').classList.add('active');
+        document.getElementById('callTimer').classList.add('active'); const inc = document.getElementById('callIncomingActions'); if (inc) inc.hidden = true;
         updateCallMicState();
       }
     } else if (event === 'ended') {
-      endCall();
+      const inc = document.getElementById('callIncomingActions'); if (inc) inc.hidden = true; endCall();
     }
   }
 };
@@ -2671,7 +2672,7 @@ function renderMessages() {
   const container = $('#messages');
   if (!conv) { container.innerHTML = ''; return; }
   const q = uiState.chatSearch.trim().toLowerCase();
-  const visibleMessages = conv.messages.filter(m => !m.deletedForMe);
+  const visibleMessages = conv.messages.filter(m => !m.deletedForMe).sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
   container.innerHTML = visibleMessages.map(m => messageHtml(m, conv, q)).join('');
   // re-renders (status ticks etc.) must not replay the entrance animation of messages already on screen
   const seen = (uiState.seenMsgIds = uiState.seenMsgIds || new Set());
@@ -2693,7 +2694,7 @@ function messageHtml(m, conv, searchQ) {
   if (isSent) {
     if (m.status === 'sending' || m.sending || m.pending) {
       const pendingLabel = m.pending ? 'بانتظار تبادل مفاتيح التشفير مع الطرف الآخر...' : 'قيد الإرسال عبر محرك الراديو';
-      checks = `<span class="msg-status-sending" title="${pendingLabel}" style="opacity:0.8;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;">⏳ ${m.pending ? 'بانتظار المفتاح' : ''}</span>`;
+      checks = `<span class="msg-status-sending" title="${pendingLabel}" style="opacity:0.8;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;"><svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg> ${m.pending ? 'بانتظار المفتاح' : ''}</span>`;
     } else if (m.failed || m.status === 'failed') {
       checks = `<button class="retry-btn" data-retry-id="${m.id}" type="button" style="font-size:11px;color:var(--red);background:rgba(255,69,58,0.12);border:none;cursor:pointer;padding:2px 8px;border-radius:6px;font-weight:600;display:inline-flex;align-items:center;gap:4px;">⚠️ فشل — إعادة المحاولة</button>`;
     } else if (m.status === 'accepted') {
@@ -2811,7 +2812,7 @@ function messageHtml(m, conv, searchQ) {
     if (m.text) bodyContent += `<div style="padding: 4px 0;">${highlightText(m.text, searchQ)}</div>`;
   } else if (m.isTiny || /^\u2063TINY:/.test(m.text || '')) {
     const rawTinyText = String(m.text || '').replace(/^\u2063TINY:(?:\d+:)?/, ''); const scale = Number(m.tinyScale || state.settings?.tinyScale || 80) || 80;
-    bodyContent += `<span class="tiny-text" style="font-size: clamp(11px, calc(1em * (${scale} / 100)), 0.9em); line-height: 1.35;"><span class="tiny-inner">${highlightText(rawTinyText, searchQ)}</span></span>`;
+    bodyContent += `<span class="tiny-text" style="font-size: calc(1em * (${scale} / 100)); line-height: 1.25;"><span class="tiny-inner">${highlightText(rawTinyText, searchQ)}</span></span>`;
   } else {
     bodyContent += highlightText(m.text || '', searchQ);
   }
@@ -4411,7 +4412,7 @@ function bindEvents() {
       setTimeout(() => $('#emojiSearch').focus(), 50);
     }
   });
-  $('#emojiCats').addEventListener('click', (e) => {
+  $('#emojiPicker')?.addEventListener('click', (e) => e.stopPropagation()); $('#emojiCats').addEventListener('click', (e) => { e.stopPropagation();
     const cat = e.target.closest('.emoji-cat');
     if (!cat) return;
     currentEmojiCat = cat.dataset.cat;
