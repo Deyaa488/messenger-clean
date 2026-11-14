@@ -496,7 +496,7 @@ class KnitBridge(
                             reactionRepository.observeReactionsIn(convId).first()
                         }.groupBy { it.messageId }
 
-                    val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsInConv[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.senderId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
+                    val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsInConv[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.reactorNodeId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
                     val uiMsgs =
                         messages
                             .sortedBy { if (it.senderId == myNodeId) it.sentAt else (it.arrivedAt ?: it.sentAt) }
@@ -733,7 +733,7 @@ class KnitBridge(
             try {
                 val newest = messageRepository.newestSentAt(conversationId) ?: System.currentTimeMillis()
                 settingsStore.setLastReadAt(conversationId, maxOf(newest, System.currentTimeMillis()))
-                val myNodeId = identity.nodeId; val msgs = messageRepository.observeNewestMessages(conversationId, 30).first(); val latestIncoming = msgs.filter { it.senderId != myNodeId }.maxByOrNull { it.sentAt }; if (latestIncoming != null && ConversationKind.fromId(conversationId, groupRepository) == ConversationKind.DM) { val existingReactions = reactionRepository.observeReactionsIn(conversationId).first(); val alreadyAcked = existingReactions.any { it.messageId == latestIncoming.id && it.senderId == myNodeId && it.emoji == "\u2063READ\u2063" }; if (!alreadyAcked) { meshController.sendReaction(messageId = latestIncoming.id, emoji = "\u2063READ\u2063", recipientId = conversationId, group = null) } }
+                val myNodeId = identity.nodeId(); val msgs = messageRepository.observeNewestMessages(conversationId, 30).first(); val latestIncoming = msgs.filter { it.senderId != myNodeId }.maxByOrNull { it.sentAt }; if (latestIncoming != null && Conversations.kindFor(conversationId) == ConversationKind.DM) { val existingReactions = reactionRepository.observeReactionsIn(conversationId).first(); val alreadyAcked = existingReactions.any { it.messageId == latestIncoming.id && it.reactorNodeId == myNodeId && it.emoji == "\u2063READ\u2063" }; if (!alreadyAcked) { meshController.sendReaction(messageId = latestIncoming.id, emoji = "\u2063READ\u2063", recipientId = conversationId, group = null) } }
             } catch (e: Exception) {
                 Log.e(KNIT_UI_TAG, "Error marking conversation read", e)
             }
@@ -1830,7 +1830,7 @@ class KnitBridge(
                     }
                 }.collect { (messages, reactionsByMsg, _) ->
                     if (isDestroyed) return@collect
-                    val dir = withContext(Dispatchers.IO) { peerRepository.observeDirectory().first() }; val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsByMsg[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.senderId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
+                    val dir = withContext(Dispatchers.IO) { peerRepository.observeDirectory().first() }; val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsByMsg[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.reactorNodeId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
                     for (m in messages) {
                         val rList = reactionsByMsg[m.id]?.mapNotNull { it.emoji }?.filter { it != "\u2063READ\u2063" } ?: emptyList()
                         val rKey = rList.joinToString(",")
