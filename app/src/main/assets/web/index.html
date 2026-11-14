@@ -434,7 +434,7 @@ body {
   max-width: 280px; border-radius: 14px; overflow: hidden;
   cursor: pointer; margin-bottom: 4px; background: var(--surface-2);
 }
-.msg-image img { width: 100%; display: block; transition: transform 0.3s var(--ease); }
+.msg-image img { width: 100%; max-height: 320px; object-fit: contain; display: block; transition: transform 0.3s var(--ease); }
 .msg-image:hover img { transform: scale(1.03); }
 .msg-bubble.image-bubble, .msg-bubble:has(> .msg-image) { padding: 3px !important; border-radius: 16px !important; }
    .msg-bubble.image-bubble .msg-image, .msg-bubble:has(> .msg-image) .msg-image { margin-bottom: 0 !important; border-radius: 13px !important; }
@@ -1817,7 +1817,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 <div class="context-menu" id="contextMenu"></div>
 <div class="toast-container" id="toastContainer"></div>
 <div class="image-viewer" id="imageViewer">
-  <img id="imageViewerImg" alt="" />
+  <div id="imageViewerBar" style="position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:linear-gradient(180deg,rgba(0,0,0,0.65),transparent);z-index:10;gap:8px;"><div style="display:flex;gap:8px;"><button type="button" id="imageViewerClose" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:15px;cursor:pointer;">&#x2715;</button><button type="button" id="imageViewerReset" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:14px;cursor:pointer;">1:1</button></div><div style="display:flex;gap:8px;"><button type="button" id="imageViewerSave" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:14px;cursor:pointer;">&#x2B07; &#x62D;&#x641;&#x638;</button><button type="button" id="imageViewerReply" style="background:rgba(255,255,255,0.18);color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:14px;cursor:pointer;">&#x21A9; &#x631;&#x62F;</button></div></div><img id="imageViewerImg" alt="" style="touch-action:none;" />
 </div>
 
 <script>
@@ -2130,7 +2130,7 @@ const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set(((
           conv.unread = (conv.unread || 0) + 1;
         }
       }
-      conv.messages.sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));          
+      conv.messages = sortMessagesCausally(conv.messages); if (uiState.typingConvs) uiState.typingConvs.delete(conv.id); if (state.activeConversationId === conv.id) { showTypingIndicator(false); checkVisibleMessagesAndMarkRead(); }          
        renderAll();
       if (isBrandNew && msg.senderId !== 'me' && !msg.read && !msg.pending && !_notifiedIds.has(String(msg.id)) && Date.now() >= (window._suppressToastUntil || 0) && state.activeConversationId !== conv.id && !conv.muted) { markMsgNotified(msg.id);
         const contact = getContact(conv.contactId);
@@ -2156,7 +2156,7 @@ const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set(((
     renderConversations();
   },
 
-  onTransferProgress: function(msgId, percent, bytesTransferred, totalBytes) {
+  onTypingChanged: function(activeConvs) { try { const list = typeof activeConvs === 'string' ? JSON.parse(activeConvs) : (Array.isArray(activeConvs) ? activeConvs : []); uiState.typingConvs = new Set(list); clearTimeout(uiState._typingSafetyTimer); if (uiState.typingConvs.size > 0) { uiState._typingSafetyTimer = setTimeout(() => { uiState.typingConvs.clear(); if (state.activeConversationId) showTypingIndicator(false); }, 4500); } const activeId = state.activeConversationId; if (activeId) { const isTyping = uiState.typingConvs.has(activeId); showTypingIndicator(isTyping); const statusEl = $('#chatStatus'); if (statusEl) { if (isTyping) { statusEl.textContent = 'يكتب الآن...'; statusEl.className = 'chat-header-status online'; } else { const conv = getActiveConv(); const contact = conv ? getContact(conv.contactId) : null; if (conv && (conv.id === 'nearby' || conv.isRoom)) { statusEl.textContent = (contact && contact.status) || 'الأجهزة المتصلة قريباً منك'; statusEl.className = 'chat-header-status online'; } else if (conv && contact) { statusEl.textContent = contact.online ? (contact.status || 'متصل الآن') : (contact.status || 'غير متصل'); statusEl.className = 'chat-header-status' + (contact.online ? ' online' : ''); } } } } } catch (e) {} }, onAttachmentSaved: function(msgId, ok, msg) { showToast(msg || (ok ? 'تم حفظ الصورة في المعرض' : 'تعذر حفظ الصورة')); }, onTransferProgress: function(msgId, percent, bytesTransferred, totalBytes) {
     const conv = getActiveConv();
     if (!conv) return;
     const msg = conv.messages.find(m => m.id === msgId || m.attachmentHash === msgId);
@@ -2581,13 +2581,13 @@ function renderConversations() {
       : 'لا توجد رسائل بعد';
     const showBadge = c.unread > 0 && !c.muted;
     const time = last ? formatConvTime(last.ts) : '';
-    const [c1, c2] = getAvatarGradient(convDisplayName);
-    const avatarStyle = contact.avatar ? 'background:#eee;' : `background:linear-gradient(135deg,${c1},${c2});`;
+    const isCommunity = (c.id === 'nearby' || c.isRoom); const finalDisplayName = isCommunity ? '\u0627\u0644\u0645\u062C\u062A\u0645\u0639' : convDisplayName; const [c1, c2] = isCommunity ? ['#0ea5e9', '#6366f1'] : getAvatarGradient(finalDisplayName);
+    const avatarStyle = isCommunity ? 'background:linear-gradient(135deg, #0ea5e9, #6366f1);' : (contact.avatar ? 'background:#eee;' : `background:linear-gradient(135deg,${c1},${c2});`);
     return `
       <div class="conv-item ${isActive ? 'active' : ''}" data-conv-id="${c.id}">
         <div class="avatar-wrap">
           <div class="avatar" style="${avatarStyle}">
-            ${contact.avatar ? `<img src="${contact.avatar}" alt=""/>` : escapeHtml(getInitial(convDisplayName))}
+            ${isCommunity ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' : (contact.avatar ? `<img src="${contact.avatar}" alt=""/>` : escapeHtml(getInitial(finalDisplayName)))}
           </div>
           ${contact.online ? '<div class="online-dot"></div>' : ''}
         </div>
@@ -2595,7 +2595,7 @@ function renderConversations() {
           <div class="conv-top">
             <div class="conv-name">
               ${c.pinned ? '<svg class="pin-icon"><use href="#i-pin"/></svg>' : ''}
-              ${escapeHtml(convDisplayName)}
+              ${escapeHtml(finalDisplayName)}
             </div>
             <div class="conv-time" dir="ltr">${escapeHtml(time)}</div>
           </div>
@@ -2639,13 +2639,13 @@ function renderChat() {
   empty.hidden = true;
   active.hidden = false;
   const contact = getContact(conv.contactId);
-  const displayTitle = conv.title || contact.name;
+  const displayTitle = (conv.id === 'nearby' || conv.isRoom) ? '\u0627\u0644\u0645\u062C\u062A\u0645\u0639' : (conv.title || contact.name);
   const avatarEl = $('#chatAvatar');
   if (contact.avatar) {
     avatarEl.outerHTML = `<div class="avatar" id="chatAvatar" style="cursor:pointer;"><img src="${contact.avatar}" alt=""/></div>`;
   } else {
-    const [c1, c2] = getAvatarGradient(displayTitle);
-    avatarEl.outerHTML = `<div class="avatar" id="chatAvatar" style="cursor:pointer;background:linear-gradient(135deg,${c1},${c2});">${escapeHtml(getInitial(displayTitle))}</div>`;
+    const [c1, c2] = (conv.id === 'nearby' || conv.isRoom) ? ['#0ea5e9', '#6366f1'] : getAvatarGradient(displayTitle);
+    avatarEl.outerHTML = `<div class="avatar" id="chatAvatar" style="cursor:pointer;background:linear-gradient(135deg,${c1},${c2});">${(conv.id === 'nearby' || conv.isRoom) ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' : escapeHtml(getInitial(displayTitle))}</div>`;
   }
   $('#chatName').textContent = displayTitle;
   const statusEl = $('#chatStatus');
@@ -2667,12 +2667,12 @@ function renderChat() {
   if (isTypingNow) showTypingIndicator(true);
 }
 
-function renderMessages() {
+function sortMessagesCausally(list) { const byTs = [...(list || [])].sort((a, b) => (Number(a.ts || a.sentAt) || 0) - (Number(b.ts || b.sentAt) || 0)); const byId = new Map(byTs.map(m => [m.id, m])); const res = [], visited = new Set(), visiting = new Set(); function visit(m) { if (!m || visited.has(m.id) || visiting.has(m.id)) return; visiting.add(m.id); const pid = typeof m.replyTo === 'string' ? m.replyTo : m.replyTo?.id; if (pid && byId.has(pid)) visit(byId.get(pid)); visiting.delete(m.id); visited.add(m.id); res.push(m); } for (const m of byTs) visit(m); return res; } function checkVisibleMessagesAndMarkRead() { const conv = getActiveConv(); if (!conv || document.hidden) return; const el = $('#messages'); if (!el || el.offsetParent === null) return; const incoming = (conv.messages || []).filter(m => m.senderId !== 'me' && !m.deletedForMe); if (!incoming.length) return; const lastMsg = incoming[incoming.length - 1]; const row = el.querySelector('.msg-row[data-msg-id="' + lastMsg.id + '"]') || el.querySelector('[data-msg-id="' + lastMsg.id + '"]'); if (!row) return; const er = el.getBoundingClientRect(), rr = row.getBoundingClientRect(); if (rr.bottom > er.top && rr.top < er.bottom) { window.KnitNative?.markConversationRead?.(state.activeConversationId); } } function renderMessages() {
   const conv = getActiveConv();
   const container = $('#messages');
   if (!conv) { container.innerHTML = ''; return; }
   const q = uiState.chatSearch.trim().toLowerCase();
-  const visibleMessages = conv.messages.filter(m => !m.deletedForMe).sort((a, b) => (Number(a.ts) || 0) - (Number(b.ts) || 0));
+  const visibleMessages = sortMessagesCausally(conv.messages.filter(m => !m.deletedForMe));
   container.innerHTML = visibleMessages.map(m => messageHtml(m, conv, q)).join('');
   // re-renders (status ticks etc.) must not replay the entrance animation of messages already on screen
   const seen = (uiState.seenMsgIds = uiState.seenMsgIds || new Set());
@@ -2692,13 +2692,8 @@ function messageHtml(m, conv, searchQ) {
   const isSent = m.senderId === 'me';
   let checks = '';
   if (isSent) {
-    if (m.status === 'sending' || m.sending || m.pending) {
-      const pendingLabel = m.pending ? 'بانتظار تبادل مفاتيح التشفير مع الطرف الآخر...' : 'قيد الإرسال عبر محرك الراديو';
-      checks = `<span class="msg-status-sending" title="${pendingLabel}" style="opacity:0.8;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;"><svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg></span>`;
-    } else if (m.failed || m.status === 'failed') {
+    if (m.failed || m.status === 'failed') {
       checks = `<button class="retry-btn" data-retry-id="${m.id}" type="button" style="font-size:11px;color:var(--red);background:rgba(255,69,58,0.12);border:none;cursor:pointer;padding:2px 8px;border-radius:6px;font-weight:600;display:inline-flex;align-items:center;gap:4px;">⚠️ فشل — إعادة المحاولة</button>`;
-    } else if (m.status === 'accepted') {
-      checks = `<span class="msg-status-accepted" title="تم قبولها محلياً" style="opacity:0.6;display:inline-flex;align-items:center;"><svg style="width:12px;height:12px;"><use href="#i-check"/></svg></span>`;
     } else {
       const isRead = m.read;
       const isDelivered = m.delivered;
@@ -2778,7 +2773,7 @@ function messageHtml(m, conv, searchQ) {
             </button>`;
         }
       } else {
-        bodyContent += `<div class="msg-image" data-view-image="${m.data}"><img src="${m.data}" alt="" loading="lazy"/></div>`;
+        bodyContent += `<div class="msg-image" data-view-image="${m.data}" data-msg-id="${m.id}"><img src="${m.data}" alt="" loading="lazy"/></div>`;
       }
     } else {
       bodyContent += `
@@ -2811,7 +2806,7 @@ function messageHtml(m, conv, searchQ) {
       </div>`;
     if (m.text) bodyContent += `<div style="padding: 4px 0;">${highlightText(m.text, searchQ)}</div>`;
   } else if (m.isTiny || /^\u2063TINY:/.test(m.text || '')) {
-    const tinyHeaderMatch = String(m.text || '').match(/^\u2063TINY:(\d+)\u2063([\s\S]*)$/); const rawTinyText = tinyHeaderMatch ? tinyHeaderMatch[2] : String(m.text || '').replace(/^\u2063TINY:(?:\d+:?)?\u2063?/, ''); const scale = clampTinyScale(m.tinyScale || (tinyHeaderMatch && tinyHeaderMatch[1]) || state.settings?.tinyScale || 80); const k = Math.max(0.0005, tinyScaleToPx(scale) / TINY_REF_PX);
+    const tinyHeaderMatch = String(m.text || '').match(/^\u2063TINY:(\d+)\u2063([\s\S]*)$/); const rawTinyText = tinyHeaderMatch ? tinyHeaderMatch[2] : String(m.text || '').replace(/^\u2063TINY:(?:\d+:?)?\u2063?/, ''); const scale = clampTinyScale(state.settings?.tinyScale ?? 80); const k = Math.max(0.0005, tinyScaleToPx(scale) / TINY_REF_PX);
     bodyContent += `<span class="tiny-text" data-tiny-scale="${scale}" data-tiny-k="${k}"><span class="tiny-inner" style="transform:scale(${k});">${highlightText(rawTinyText, searchQ)}</span></span>`;
   } else {
     bodyContent += highlightText(m.text || '', searchQ);
@@ -3171,7 +3166,7 @@ function updateReplyPreview() {
   if (!msg) { el.hidden = true; return; }
   const contact = getContact(conv.contactId);
   const senderName = msg.senderId === 'me' ? state.currentUser.name : contact.name;
-  $('#replyPreviewName').textContent = senderName;
+  $('#replyPreviewName').textContent = senderName; let rThumb = el.querySelector('.reply-preview-thumb'); if (msg.type === 'image' && msg.data && !msg.viewOnce) { if (!rThumb) { rThumb = document.createElement('img'); rThumb.className = 'reply-preview-thumb'; rThumb.style.cssText = 'width:34px;height:34px;border-radius:6px;object-fit:cover;margin-inline-end:8px;flex-shrink:0;'; el.insertBefore(rThumb, el.firstChild); } rThumb.src = msg.data; rThumb.hidden = false; } else if (rThumb) { rThumb.hidden = true; }
   $('#replyPreviewText').textContent = (msg.isTiny ? '⤓ ' : '') + previewText(msg);
   el.hidden = false;
 }
@@ -3629,7 +3624,7 @@ function initMessageGestures() {
     if (!msgEl) return;
     if (msgEl.classList.contains('msg-deleted')) return;
     // Skip interactive elements (they handle their own clicks)
-    if (e.target.closest('button, a, [data-jump-to], [data-play-voice], .msg-image, .view-once-bubble, .reaction-chip')) return;
+    if (e.target.closest('button, a, [data-jump-to], [data-play-voice], .view-once-bubble, .reaction-chip')) return;
 
     const isTiny = msgEl.classList.contains('tiny');
 
@@ -3750,7 +3745,7 @@ function initMessageGestures() {
       setTimeout(() => { suppressNextClick = false; }, 350);
     }
 
-    if (g.mode === 'swipe') {
+    if (g.mode === 'swipe') { window._lastSwipeTs = Date.now();
       if (g.hint && g.hint.parentNode) g.hint.remove();
       if (g.bubble) {
         g.bubble.style.transition = 'transform 0.3s cubic-bezier(0.32,0.72,0,1)';
@@ -3875,7 +3870,7 @@ function initMessageGestures() {
     // Image view (normal)
     const img = e.target.closest('[data-view-image]');
     if (img) {
-      $('#imageViewerImg').src = img.dataset.viewImage;
+      if (Date.now() - (window._lastSwipeTs || 0) < 350) return; window._viewerMsgId = img.dataset.msgId; if (window._resetImageViewer) window._resetImageViewer(); $('#imageViewerImg').src = img.dataset.viewImage;
       $('#imageViewer').classList.add('active');
       return;
     }
@@ -4626,7 +4621,7 @@ function bindEvents() {
   $('#tinySizeSlider').addEventListener('input', () => {
     state.settings.tinyScale = clampTinyScale($('#tinySizeSlider').value);
     updateTinySizePreview();
-    if (uiState.tinyMode) updateTinyModeUI();
+    if (uiState.tinyMode) updateTinyModeUI(); const k = Math.max(0.0005, tinyScaleToPx(state.settings.tinyScale) / TINY_REF_PX); document.querySelectorAll('.msg.tiny .tiny-text').forEach(el => { el.dataset.tinyK = String(k); }); layoutTinyTexts();
     saveDebounced();
   });
   $('#tinyOpacitySlider').addEventListener('input', () => {
@@ -4709,7 +4704,7 @@ function bindEvents() {
     }
   });
 
-  $('#imageViewer').addEventListener('click', () => $('#imageViewer').classList.remove('active'));
+  $('#imageViewer').addEventListener('click', (e) => { if (e.target === $('#imageViewer')) $('#imageViewer').classList.remove('active'); }); $('#imageViewerClose')?.addEventListener('click', (e) => { e.stopPropagation(); $('#imageViewer').classList.remove('active'); }); (function() { const img = $('#imageViewerImg'); if (!img) return; let scale = 1, tx = 0, ty = 0, startDist = 0, startScale = 1, panStartX = 0, panStartY = 0, startTx = 0, startTy = 0, mode = null; function applyTransform() { img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`; } window._resetImageViewer = function() { scale = 1; tx = 0; ty = 0; applyTransform(); }; $('#imageViewerReset')?.addEventListener('click', (e) => { e.stopPropagation(); window._resetImageViewer(); }); $('#imageViewerSave')?.addEventListener('click', (e) => { e.stopPropagation(); if (window._viewerMsgId && window.KnitNative && window.KnitNative.saveOrOpenAttachment) window.KnitNative.saveOrOpenAttachment(window._viewerMsgId); }); $('#imageViewerReply')?.addEventListener('click', (e) => { e.stopPropagation(); $('#imageViewer').classList.remove('active'); if (window._viewerMsgId) startReply(window._viewerMsgId); }); img.addEventListener('click', (e) => e.stopPropagation()); img.addEventListener('touchstart', (e) => { e.stopPropagation(); if (e.touches.length === 2) { mode = 'pinch'; startDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); startScale = scale; } else if (e.touches.length === 1 && scale > 1) { mode = 'pan'; panStartX = e.touches[0].clientX; panStartY = e.touches[0].clientY; startTx = tx; startTy = ty; } else { mode = null; } }, { passive: false }); img.addEventListener('touchmove', (e) => { e.stopPropagation(); if (mode === 'pinch' && e.touches.length === 2 && startDist > 0) { e.preventDefault(); const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); scale = Math.min(5, Math.max(1, startScale * (dist / startDist))); if (scale === 1) { tx = 0; ty = 0; } applyTransform(); } else if (mode === 'pan' && e.touches.length === 1 && scale > 1) { e.preventDefault(); tx = startTx + (e.touches[0].clientX - panStartX); ty = startTy + (e.touches[0].clientY - panStartY); applyTransform(); } }, { passive: false }); img.addEventListener('touchend', (e) => { e.stopPropagation(); if (e.touches.length < 2 && mode === 'pinch') mode = null; if (e.touches.length === 0) { mode = null; if (scale <= 1) { scale = 1; tx = 0; ty = 0; applyTransform(); } } }); })(); $('#messages')?.addEventListener('scroll', () => checkVisibleMessagesAndMarkRead(), { passive: true });
 
   $('#callEnd').addEventListener('click', endCall);
   $('#callMute').addEventListener('click', (e) => {
