@@ -499,7 +499,7 @@ class KnitBridge(
                     val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsInConv[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.reactorNodeId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
                     val uiMsgs =
                         messages
-                            .sortedBy { if (it.senderId == myNodeId) it.sentAt else (it.arrivedAt ?: it.sentAt) }
+                            .sortedWith(compareBy<MessageEntity> { it.sentAt }.thenBy { it.id })
                             .mapNotNull { m ->
                                 val rList = reactionsInConv[m.id]?.mapNotNull { it.emoji }?.filter { it != "\u2063READ\u2063" } ?: emptyList()
                                 m.toUiMessageOrNull(myNodeId, dir, blobs, rList, isReadByPeer = (m.senderId == myNodeId && m.sentAt <= maxReadSentAt))
@@ -531,7 +531,7 @@ class KnitBridge(
                     val kind = Conversations.kindFor(convId)
                     val title =
                         when (kind) {
-                            ConversationKind.NEARBY -> "غرفة الأجهزة المجاورة (Nearby)"
+                            ConversationKind.NEARBY -> "المجتمع"
                             ConversationKind.GROUP -> {
                                 val g = groupsById[convId]
                                 val memberIds = g?.let { GroupMembersStore.decode(it.members) }.orEmpty()
@@ -739,7 +739,11 @@ class KnitBridge(
             }
         }
     }
-
+    @JavascriptInterface
+    fun markMessageRead(conversationId: String, messageId: String) {
+        markConversationRead(conversationId)
+    }
+    
     @JavascriptInterface
     fun sendTypingIndicator(conversationId: String) {
         if (conversationId.isBlank()) return
@@ -1343,7 +1347,8 @@ class KnitBridge(
             }
         }
     }
-
+    @Volatile private val savedAttachmentHashes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    
     @JavascriptInterface
     fun saveOrOpenAttachment(msgId: String) {
         if (msgId.isBlank()) return
@@ -1351,7 +1356,7 @@ class KnitBridge(
         scope.launch(Dispatchers.IO) {
             try {
                 val msg = messageRepository.find(msgId) ?: return@launch
-                val hash = msg.attachmentHash ?: return@launch
+                val hash = msg.attachmentHash ?: return@launch; if (savedAttachmentHashes.contains(hash)) { evaluateJs("if (window.KnitBridge && window.KnitBridge.onAttachmentSaved) window.KnitBridge.onAttachmentSaved('${escapeJs(msgId)}', true, 'الصورة محفوظة بالفعل في المعرض');"); return@launch }
                 val rawBlob = blobs.bytes(hash)
                 if (rawBlob == null) {
                     debugLog("[KT->ENGINE] Blob $hash missing locally; calling downloadAttachment($hash)")
@@ -1385,7 +1390,7 @@ class KnitBridge(
                         mime.startsWith("video/") && gallerySaver != null -> gallerySaver.saveToMovies(decrypted, hash, mime)
                         else -> saveFileToDownloads(decrypted, fileName, mime)
                     }
-                if (savedOk) {
+                if (savedOk) { savedAttachmentHashes.add(hash)
                     evaluateJs(
                         "if (window.KnitBridge && window.KnitBridge.onAttachmentSaved) " +
                             "window.KnitBridge.onAttachmentSaved('${escapeJs(msgId)}', true, 'تم حفظ الملف (${escapeJs(fileName)}) في تنزيلات الهاتف');",
@@ -1822,7 +1827,7 @@ class KnitBridge(
                     messageRepository.observeNewestMessages(convId, 60),
                     reactionRepository.observeReactionsIn(convId),
                 ) { messages, reactions ->
-                    messages.sortedBy { if (it.senderId == myNodeId) it.sentAt else (it.arrivedAt ?: it.sentAt) } to reactions.groupBy { it.messageId }
+                    messages.sortedWith(compareBy<MessageEntity> { it.sentAt }.thenBy { it.id }) to reactions.groupBy { it.messageId }
                 }.flatMapLatest { (messages, reactionsByMsg) ->
                     val hashes = messages.mapNotNull { it.attachmentHash }.toSet()
                     blobs.observeSizes(hashes).map { blobSizes ->
@@ -1895,7 +1900,7 @@ class KnitBridge(
                 id = id,
                 senderId = if (senderId == myNodeId) "me" else senderId,
                 senderName = actorName,
-                ts = if (senderId == myNodeId) sentAt else (arrivedAt ?: sentAt),
+                ts = sentAt,
                 text = systemText,
                 type = "text",
                 delivered = true,
@@ -1951,7 +1956,7 @@ class KnitBridge(
 
         val senderLabel = if (isSentByMe) "أنا" else dir.label(senderId).text.ifBlank { Alias.aliasFor(senderId) }
 
-        val tinyMatch = Regex("^\\u2063TINY:(\\d+)\\u2063(.*)$", RegexOption.DOT_MATCHES_ALL).matchEntire(body)
+        val tinyMatch = Regex("^\\u2063TINY(?::(\\d+))?\\u2063(.*)$", RegexOption.DOT_MATCHES_ALL).matchEntire(body)
         val parsedIsTiny = tinyMatch != null
         val parsedTinyScale = tinyMatch?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(1, 100) ?: 80
         val cleanBody = tinyMatch?.groupValues?.get(2) ?: body
@@ -1959,7 +1964,7 @@ class KnitBridge(
             id = id,
             senderId = if (isSentByMe) "me" else senderId,
             senderName = senderLabel,
-            ts = if (senderId == myNodeId) sentAt else (arrivedAt ?: sentAt),
+            ts = sentAt,
             text = cleanBody,
             type = msgType,
             data = dataBase64,
