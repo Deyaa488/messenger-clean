@@ -951,10 +951,13 @@ class KnitBridge(
                     } else {
                         null
                     }
-
+                val cleanText = text.trim()
+                val safeScale = tinyScale.coerceIn(55, 95)
+                val payloadText = if (isTiny) "\u2063TINY:$safeScale\u2063$cleanText" else cleanText
+                
                 val sent =
                     meshController.sendChat(
-                        text = text,
+                        text = payloadText,
                         recipientId = recipientId,
                         group = groupInfo,
                         replyTo = replyRef,
@@ -1838,12 +1841,16 @@ class KnitBridge(
 
         val senderLabel = if (isSentByMe) "أنا" else dir.label(senderId).text.ifBlank { Alias.aliasFor(senderId) }
 
+        val tinyMatch = Regex("^\\u2063TINY:(\\d+)\\u2063(.*)$", RegexOption.DOT_MATCHES_ALL).matchEntire(body)
+        val parsedIsTiny = tinyMatch != null
+        val parsedTinyScale = tinyMatch?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(55, 95) ?: 80
+        val cleanBody = tinyMatch?.groupValues?.get(2) ?: body
         return UiMessage(
             id = id,
             senderId = if (isSentByMe) "me" else senderId,
             senderName = senderLabel,
             ts = sentAt,
-            text = body,
+            text = cleanBody,
             type = msgType,
             data = dataBase64,
             attachmentHash = attachmentHash,
@@ -1857,6 +1864,8 @@ class KnitBridge(
             read = received,
             failed = false,
             reactions = reactionsList,
+            isTiny = parsedIsTiny,
+            tinyScale = parsedTinyScale,
         )
     }
 
