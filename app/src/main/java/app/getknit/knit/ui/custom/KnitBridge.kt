@@ -878,6 +878,18 @@ class KnitBridge(
                     "theme" -> {
                         val mode = if (value == "dark") ThemeMode.Dark else ThemeMode.Light
                         settingsStore.setThemeMode(mode)
+                        mainHandler.post {
+                            val isDark = value == "dark"
+                            (context as? android.app.Activity)?.window?.let { win ->
+                                val barColor = if (isDark) android.graphics.Color.parseColor("#0F172A") else android.graphics.Color.WHITE
+                                win.statusBarColor = barColor
+                                win.navigationBarColor = barColor
+                                androidx.core.view.WindowCompat.getInsetsController(win, win.decorView).apply {
+                                    isAppearanceLightStatusBars = !isDark
+                                    isAppearanceLightNavigationBars = !isDark
+                                }
+                            }
+                        }
                     }
                     "openToChat" -> {
                         settingsStore.setOpenToChat(value.toBoolean())
@@ -1206,6 +1218,8 @@ class KnitBridge(
                 "window.KnitBridge.onVoiceRecordingState(false, 0, '');",
         )
     }
+    @Volatile private var lastPlayingMsgId: String? = null
+    @Volatile private var lastPlayingHash: String? = null
 
     @JavascriptInterface
     fun playVoiceMessage(msgId: String) {
@@ -1222,10 +1236,29 @@ class KnitBridge(
                 )
                 return@launch
             }
+            lastPlayingMsgId = msgId
+            lastPlayingHash = hash
             voicePlayer.play(hash, msg.attachmentKey)
         }
     }
 
+    @JavascriptInterface
+    fun playVoice(msgId: String) = playVoiceMessage(msgId)
+
+    @JavascriptInterface
+    fun pauseVoice() {
+        voicePlayer.pause()
+    }
+
+    @JavascriptInterface
+    fun seekVoice(msgId: String, positionMs: Int) {
+        scope.launch(Dispatchers.IO) {
+            val hash = if (lastPlayingMsgId == msgId && lastPlayingHash != null) lastPlayingHash else messageRepository.find(msgId)?.attachmentHash
+            if (!hash.isNullOrBlank()) {
+                voicePlayer.seek(hash, positionMs)
+            }
+        }
+    }
     @JavascriptInterface
     fun sendAttachment(
         conversationId: String,
@@ -1588,6 +1621,20 @@ class KnitBridge(
     }
 
     private fun startObservingMeshEvents() {
+        scope.launch {
+            var activeMsgId: String? = null
+            voicePlayer.nowPlaying.collect { pb ->
+                if (pb != null) {
+                    val mId = lastPlayingMsgId ?: activeMsgId ?: return@collect
+                    activeMsgId = mId
+                    evaluateJs("window.KnitBridge && window.KnitBridge.onVoicePlaybackState && window.KnitBridge.onVoicePlaybackState('${escapeJs(mId)}', ${pb.playing}, ${pb.positionMs}, ${pb.durationMs});")
+                } else if (activeMsgId != null) {
+                    val endedId = activeMsgId ?: return@collect
+                    activeMsgId = null
+                    evaluateJs("window.KnitBridge && window.KnitBridge.onVoicePlaybackState && window.KnitBridge.onVoicePlaybackState('${escapeJs(endedId)}', false, 0, 0);")
+                }
+            }
+        }
         // 1. Live Neighbor Count
         meshStatusJob =
             scope.launch {
@@ -1711,7 +1758,8 @@ class KnitBridge(
         val job =
             scope.launch {
                 val myNodeId = identity.nodeId()
-                combine(
+              var isFirstEmission = true
+              combine(
                     messageRepository.observeNewestMessages(convId, 60),
                     reactionRepository.observeReactionsIn(convId),
                 ) { messages, reactions ->
@@ -1751,10 +1799,13 @@ class KnitBridge(
                                 "[DB->KT] onMessageReceived conv=$convId msgId=${m.id} " +
                                     "pending=${uiMsg.pending} delivered=${uiMsg.delivered} blob=${uiMsg.blobAvailable}",
                             )
+                        if (!isFirstEmission) {
                             val msgJson = json.encodeToString(uiMsg)
                             evaluateJs("if (window.KnitBridge) window.KnitBridge.onMessageReceived('${escapeJs(convId)}', $msgJson);")
-                        }
+                        }}
+                        
                     }
+                isFirstEmission = false
                 }
             }
         conversationMessageJobs[convId] = job
