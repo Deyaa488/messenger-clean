@@ -1347,7 +1347,7 @@ class KnitBridge(
             }
         }
     }
-    @Volatile private val savedAttachmentHashes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val savedAttachmentHashes = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     
     @JavascriptInterface
     fun saveOrOpenAttachment(msgId: String) {
