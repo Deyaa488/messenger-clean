@@ -234,6 +234,7 @@ class KnitBridge(
     private data class MessageDeliverySnapshot(
         val pending: Boolean,
         val delivered: Boolean,
+        val read: Boolean = false,
         val failed: Boolean,
         val blobAvailable: Boolean = false,
         val hasBlobData: Boolean = false,
@@ -495,12 +496,13 @@ class KnitBridge(
                             reactionRepository.observeReactionsIn(convId).first()
                         }.groupBy { it.messageId }
 
+                    val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsInConv[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.senderId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
                     val uiMsgs =
                         messages
-                            .sortedBy { it.sentAt }
+                            .sortedBy { if (it.senderId == myNodeId) it.sentAt else (it.arrivedAt ?: it.sentAt) }
                             .mapNotNull { m ->
-                                val rList = reactionsInConv[m.id]?.mapNotNull { it.emoji } ?: emptyList()
-                                m.toUiMessageOrNull(myNodeId, dir, blobs, rList)
+                                val rList = reactionsInConv[m.id]?.mapNotNull { it.emoji }?.filter { it != "\u2063READ\u2063" } ?: emptyList()
+                                m.toUiMessageOrNull(myNodeId, dir, blobs, rList, isReadByPeer = (m.senderId == myNodeId && m.sentAt <= maxReadSentAt))
                             }
 
                     for (m in uiMsgs) {
@@ -508,6 +510,7 @@ class KnitBridge(
                             MessageDeliverySnapshot(
                                 pending = m.pending,
                                 delivered = m.delivered,
+                                read = m.read,
                                 failed = m.failed,
                                 blobAvailable = m.blobAvailable,
                                 hasBlobData = m.data != null,
@@ -730,6 +733,7 @@ class KnitBridge(
             try {
                 val newest = messageRepository.newestSentAt(conversationId) ?: System.currentTimeMillis()
                 settingsStore.setLastReadAt(conversationId, maxOf(newest, System.currentTimeMillis()))
+                val myNodeId = identity.nodeId; val msgs = messageRepository.observeNewestMessages(conversationId, 30).first(); val latestIncoming = msgs.filter { it.senderId != myNodeId }.maxByOrNull { it.sentAt }; if (latestIncoming != null && ConversationKind.fromId(conversationId, groupRepository) == ConversationKind.DM) { val existingReactions = reactionRepository.observeReactionsIn(conversationId).first(); val alreadyAcked = existingReactions.any { it.messageId == latestIncoming.id && it.senderId == myNodeId && it.emoji == "\u2063READ\u2063" }; if (!alreadyAcked) { meshController.sendReaction(messageId = latestIncoming.id, emoji = "\u2063READ\u2063", recipientId = conversationId, group = null) } }
             } catch (e: Exception) {
                 Log.e(KNIT_UI_TAG, "Error marking conversation read", e)
             }
@@ -1597,7 +1601,7 @@ class KnitBridge(
             return
         }
         scope.launch {
-            val refusal = calls.start(peerId, CallKind.AUTO)
+            val liveRefusal = calls.start(peerId, CallKind.LIVE) ?: return@launch; val refusal = if (liveRefusal == CallRefusal.NO_LIVE) calls.start(peerId, CallKind.AUTO) else liveRefusal
             debugLog("[KT->CALL] calls.start($peerId, CallKind.AUTO) -> refusal=$refusal")
             if (refusal != null) {
                 val msg =
@@ -1623,7 +1627,7 @@ class KnitBridge(
     }
 
     @JavascriptInterface
-    fun acceptVoiceCall() {
+    fun setCallMuted(muted: Boolean) { (context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager)?.isMicrophoneMute = muted } @JavascriptInterface fun setCallSpeaker(speakerOn: Boolean) { val am = context.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return; am.mode = android.media.AudioManager.MODE_IN_COMMUNICATION; @Suppress("DEPRECATION") am.isSpeakerphoneOn = speakerOn } @JavascriptInterface fun acceptVoiceCall() { if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { mainHandler.post { onRequestAudioPermission?.invoke() }; return }
         val calls = callManager ?: return
         val id = activeCallId ?: calls.state.value?.id ?: return
         scope.launch {
@@ -1675,7 +1679,7 @@ class KnitBridge(
                         lastPhase = callState.phase
                         lastCallId = callState.id
                         val eventName = when (callState.phase) {
-                            CallPhase.Alerting -> "incoming"
+                            CallPhase.Alerting -> { if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) { mainHandler.post { onRequestAudioPermission?.invoke() } }; "incoming" }
                             CallPhase.Connected -> "connected"
                             CallPhase.Ended -> "ended"
                             else -> null
@@ -1818,7 +1822,7 @@ class KnitBridge(
                     messageRepository.observeNewestMessages(convId, 60),
                     reactionRepository.observeReactionsIn(convId),
                 ) { messages, reactions ->
-                    messages.sortedBy { it.sentAt } to reactions.groupBy { it.messageId }
+                    messages.sortedBy { if (it.senderId == myNodeId) it.sentAt else (it.arrivedAt ?: it.sentAt) } to reactions.groupBy { it.messageId }
                 }.flatMapLatest { (messages, reactionsByMsg) ->
                     val hashes = messages.mapNotNull { it.attachmentHash }.toSet()
                     blobs.observeSizes(hashes).map { blobSizes ->
@@ -1826,16 +1830,16 @@ class KnitBridge(
                     }
                 }.collect { (messages, reactionsByMsg, _) ->
                     if (isDestroyed) return@collect
-                    val dir = withContext(Dispatchers.IO) { peerRepository.observeDirectory().first() }
+                    val dir = withContext(Dispatchers.IO) { peerRepository.observeDirectory().first() }; val maxReadSentAt = messages.filter { m -> m.senderId == myNodeId && reactionsByMsg[m.id]?.any { r -> r.emoji == "\u2063READ\u2063" && r.senderId != myNodeId } == true }.maxOfOrNull { it.sentAt } ?: -1L
                     for (m in messages) {
-                        val rList = reactionsByMsg[m.id]?.mapNotNull { it.emoji } ?: emptyList()
+                        val rList = reactionsByMsg[m.id]?.mapNotNull { it.emoji }?.filter { it != "\u2063READ\u2063" } ?: emptyList()
                         val rKey = rList.joinToString(",")
-                        val uiMsg = m.toUiMessageOrNull(myNodeId, dir, blobs, rList) ?: continue
+                        val uiMsg = m.toUiMessageOrNull(myNodeId, dir, blobs, rList, isReadByPeer = (m.senderId == myNodeId && m.sentAt <= maxReadSentAt)) ?: continue
                         val hasBlobDataNow = (uiMsg.data != null)
                         val prev = knownMessageStates[m.id]
                         if (prev == null ||
                             prev.pending != uiMsg.pending ||
-                            prev.delivered != uiMsg.delivered ||
+                            prev.delivered != uiMsg.delivered || prev.read != uiMsg.read ||
                             prev.failed != uiMsg.failed ||
                             prev.blobAvailable != uiMsg.blobAvailable ||
                             prev.hasBlobData != hasBlobDataNow ||
@@ -1844,7 +1848,7 @@ class KnitBridge(
                             knownMessageStates[m.id] =
                                 MessageDeliverySnapshot(
                                     pending = uiMsg.pending,
-                                    delivered = uiMsg.delivered,
+                                    delivered = uiMsg.delivered, read = uiMsg.read,
                                     failed = uiMsg.failed,
                                     blobAvailable = uiMsg.blobAvailable,
                                     hasBlobData = hasBlobDataNow,
@@ -1870,7 +1874,7 @@ class KnitBridge(
         myNodeId: String,
         dir: PeerDirectory,
         blobs: BlobRepository,
-        reactionsList: List<String> = emptyList(),
+        reactionsList: List<String> = emptyList(), isReadByPeer: Boolean = false,
     ): UiMessage? {
         if (kind != MessageEntity.KIND_NORMAL) {
             val actorName = if (senderId == myNodeId) "أنت" else dir.label(senderId).text.ifBlank { Alias.aliasFor(senderId) }
@@ -1891,7 +1895,7 @@ class KnitBridge(
                 id = id,
                 senderId = if (senderId == myNodeId) "me" else senderId,
                 senderName = actorName,
-                ts = sentAt,
+                ts = if (senderId == myNodeId) sentAt else (arrivedAt ?: sentAt),
                 text = systemText,
                 type = "text",
                 delivered = true,
@@ -1955,7 +1959,7 @@ class KnitBridge(
             id = id,
             senderId = if (isSentByMe) "me" else senderId,
             senderName = senderLabel,
-            ts = sentAt,
+            ts = if (senderId == myNodeId) sentAt else (arrivedAt ?: sentAt),
             text = cleanBody,
             type = msgType,
             data = dataBase64,
@@ -1965,9 +1969,9 @@ class KnitBridge(
             fileSize = attachmentSize ?: 0L,
             duration = voiceDurationMs?.let { (it / 1000).coerceAtLeast(1) } ?: 0,
             replyTo = replyToId,
-            pending = isSentByMe && !received,
-            delivered = received,
-            read = false,
+            pending = pendingKey,
+            delivered = received || isReadByPeer,
+            read = isReadByPeer,
             failed = false,
             reactions = reactionsList,
             isTiny = parsedIsTiny,
