@@ -2227,17 +2227,17 @@ const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set(((
     if (event === 'incoming') {
       const peer = getContact(peerId);
       showToast('مكالمة واردة من ' + (peer ? peer.name : 'مجهول'), 'info', 4000);
-      const overlay = document.getElementById('callOverlay'); if (overlay) { const name = (peer && peer.name) ? peer.name : (peerId || 'Incoming'); const av = document.getElementById('callAvatar'); if (av) { const [c1, c2] = getAvatarGradient(name); av.innerHTML = (peer && peer.avatar) ? '<img src="' + peer.avatar + '" alt=""/>' : escapeHtml(getInitial(name)); av.style.background = (peer && peer.avatar) ? '#eee' : 'linear-gradient(135deg,' + c1 + ',' + c2 + ')'; } document.getElementById('callName').textContent = name; document.getElementById('callStatus').textContent = '\u0645\u0643\u0627\u0644\u0645\u0629 \u0648\u0627\u0631\u062f\u0629...'; document.getElementById('callTimer').textContent = '00:00'; document.getElementById('callTimer').classList.remove('active'); document.getElementById('callMicState').hidden = true; overlay.classList.add('active'); uiState.call = { startTs: null, connected: false, muted: false, speaker: false }; let inc = document.getElementById('callIncomingActions'); if (!inc) { inc = document.createElement('div'); inc.id = 'callIncomingActions'; inc.style.cssText = 'display:flex;gap:16px;justify-content:center;margin-top:16px;'; inc.innerHTML = '<button id="callAcceptBtn" type="button" style="background:#16a34a;color:#fff;border:none;border-radius:999px;padding:10px 22px;font-weight:700;cursor:pointer;">\u0642\u0628\u0648\u0644</button><button id="callDeclineBtn" type="button" style="background:#dc2626;color:#fff;border:none;border-radius:999px;padding:10px 22px;font-weight:700;cursor:pointer;">\u0631\u0641\u0636</button>'; const actions = overlay.querySelector('.call-actions'); if (actions && actions.parentNode) actions.parentNode.insertBefore(inc, actions); else overlay.appendChild(inc); document.getElementById('callAcceptBtn').onclick = () => { if (window.KnitNative && window.KnitNative.acceptVoiceCall) window.KnitNative.acceptVoiceCall(); }; document.getElementById('callDeclineBtn').onclick = () => { if (window.KnitNative && window.KnitNative.declineVoiceCall) window.KnitNative.declineVoiceCall(); inc.hidden = true; endCall(); }; } inc.hidden = false; }
+      const overlay = document.getElementById('callOverlay'); if (overlay) { const name = (peer && peer.name) ? peer.name : (peerId || 'Incoming'); const av = document.getElementById('callAvatar'); if (av) { const [c1, c2] = getAvatarGradient(name); av.innerHTML = (peer && peer.avatar) ? '<img src="' + peer.avatar + '" alt=""/>' : escapeHtml(getInitial(name)); av.style.background = (peer && peer.avatar) ? '#eee' : 'linear-gradient(135deg,' + c1 + ',' + c2 + ')'; } document.getElementById('callName').textContent = name; document.getElementById('callStatus').textContent = '\u0645\u0643\u0627\u0644\u0645\u0629 \u0648\u0627\u0631\u062f\u0629...'; document.getElementById('callTimer').textContent = '00:00'; document.getElementById('callTimer').classList.remove('active'); document.getElementById('callMicState').hidden = true; overlay.classList.add('active'); uiState.call = { peerId, startTs: null, connected: false, muted: false, speaker: false, incoming: true }; let inc = document.getElementById('callIncomingActions'); if (!inc) { inc = document.createElement('div'); inc.id = 'callIncomingActions'; inc.style.cssText = 'display:flex;gap:16px;justify-content:center;margin-top:16px;'; inc.innerHTML = '<button id="callAcceptBtn" type="button" style="background:#16a34a;color:#fff;border:none;border-radius:999px;padding:10px 22px;font-weight:700;cursor:pointer;">\u0642\u0628\u0648\u0644</button><button id="callDeclineBtn" type="button" style="background:#dc2626;color:#fff;border:none;border-radius:999px;padding:10px 22px;font-weight:700;cursor:pointer;">\u0631\u0641\u0636</button>'; const actions = overlay.querySelector('.call-actions'); if (actions && actions.parentNode) actions.parentNode.insertBefore(inc, actions); else overlay.appendChild(inc); document.getElementById('callAcceptBtn').onclick = () => { if (window.KnitNative && window.KnitNative.acceptVoiceCall) window.KnitNative.acceptVoiceCall(); }; document.getElementById('callDeclineBtn').onclick = () => { if (window.KnitNative && window.KnitNative.declineVoiceCall) window.KnitNative.declineVoiceCall(); inc.hidden = true; endCall(); }; } inc.hidden = false; }
     } else if (event === 'connected') {
-      if (uiState.call) {
+      if (!uiState.call) { uiState.call = { peerId, startTs: null, connected: false, muted: false, speaker: false }; } if (uiState.call) {
         uiState.call.connected = true;
-        uiState.call.startTs = now();
+        uiState.call.startTs = uiState.call.startTs || now();
         document.getElementById('callStatus').textContent = 'متصل (Wi-Fi Direct)';
         document.getElementById('callTimer').classList.add('active'); const inc = document.getElementById('callIncomingActions'); if (inc) inc.hidden = true;
-        updateCallMicState();
+        updateCallMicState(); clearInterval(callInterval); callInterval = setInterval(() => { if (!uiState.call || !uiState.call.startTs) return; const s = Math.floor((now() - uiState.call.startTs) / 1000); const t = document.getElementById('callTimer'); if (t) t.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }, 1000);
       }
     } else if (event === 'ended') {
-      const inc = document.getElementById('callIncomingActions'); if (inc) inc.hidden = true; endCall();
+      const inc = document.getElementById('callIncomingActions'); if (inc) inc.hidden = true; endCall(true);
     }
   }
 };
@@ -2392,8 +2392,8 @@ function layoutTinyTexts(root) {
     inner.style.maxWidth = (maxW / k) + 'px';
     inner.style.transformOrigin = getComputedStyle(el).direction === 'rtl' ? 'top right' : 'top left';
     inner.style.transform = 'scale(' + k + ')';
-    el.style.width = (inner.offsetWidth * k) + 'px';
-    el.style.height = (inner.offsetHeight * k) + 'px';
+    if (inner.offsetWidth > 0 && inner.offsetHeight > 0) { el.style.width = Math.max(2, Math.ceil(inner.offsetWidth * k)) + 'px';
+    el.style.height = Math.max(2, Math.ceil(inner.offsetHeight * k)) + 'px'; } else if (inner.offsetWidth === 0) { setTimeout(() => layoutTinyTexts(root), 35); }
   });
 }
 function updateTinyMirror() { // typing preview: real textarea text is transparent, this scaled mirror shows it
@@ -2694,7 +2694,7 @@ function messageHtml(m, conv, searchQ) {
   if (isSent) {
     if (m.status === 'sending' || m.sending || m.pending) {
       const pendingLabel = m.pending ? 'بانتظار تبادل مفاتيح التشفير مع الطرف الآخر...' : 'قيد الإرسال عبر محرك الراديو';
-      checks = `<span class="msg-status-sending" title="${pendingLabel}" style="opacity:0.8;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;"><svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg> ${m.pending ? 'بانتظار المفتاح' : ''}</span>`;
+      checks = `<span class="msg-status-sending" title="${pendingLabel}" style="opacity:0.8;display:inline-flex;align-items:center;gap:4px;font-size:10.5px;"><svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg></span>`;
     } else if (m.failed || m.status === 'failed') {
       checks = `<button class="retry-btn" data-retry-id="${m.id}" type="button" style="font-size:11px;color:var(--red);background:rgba(255,69,58,0.12);border:none;cursor:pointer;padding:2px 8px;border-radius:6px;font-weight:600;display:inline-flex;align-items:center;gap:4px;">⚠️ فشل — إعادة المحاولة</button>`;
     } else if (m.status === 'accepted') {
@@ -2806,13 +2806,13 @@ function messageHtml(m, conv, searchQ) {
     bodyContent += `
       <div class="msg-voice">
         <button class="voice-play" data-play-voice="${m.id}" type="button"><svg><use href="#i-play"/></svg></button>
-        <div class="voice-wave">${bars.map(b => `<span style="height:${b}px;"></span>`).join('')}</div>
+        <div class="voice-wave" data-dur-ms="${(Number(m.duration) || 1) * 1000}">${bars.map(b => `<span style="height:${b}px;"></span>`).join('')}</div>
         <span class="voice-duration">${m.duration || 1}″</span>
       </div>`;
     if (m.text) bodyContent += `<div style="padding: 4px 0;">${highlightText(m.text, searchQ)}</div>`;
   } else if (m.isTiny || /^\u2063TINY:/.test(m.text || '')) {
-    const rawTinyText = String(m.text || '').replace(/^\u2063TINY:(?:\d+:)?/, ''); const scale = Number(m.tinyScale || state.settings?.tinyScale || 80) || 80;
-    bodyContent += `<span class="tiny-text" style="font-size: calc(1em * (${scale} / 100)); line-height: 1.25;"><span class="tiny-inner">${highlightText(rawTinyText, searchQ)}</span></span>`;
+    const tinyHeaderMatch = String(m.text || '').match(/^\u2063TINY:(\d+)\u2063([\s\S]*)$/); const rawTinyText = tinyHeaderMatch ? tinyHeaderMatch[2] : String(m.text || '').replace(/^\u2063TINY:(?:\d+:?)?\u2063?/, ''); const scale = clampTinyScale(m.tinyScale || (tinyHeaderMatch && tinyHeaderMatch[1]) || state.settings?.tinyScale || 80); const k = Math.max(0.0005, tinyScaleToPx(scale) / TINY_REF_PX);
+    bodyContent += `<span class="tiny-text" data-tiny-scale="${scale}" data-tiny-k="${k}"><span class="tiny-inner" style="transform:scale(${k});">${highlightText(rawTinyText, searchQ)}</span></span>`;
   } else {
     bodyContent += highlightText(m.text || '', searchQ);
   }
@@ -3935,10 +3935,7 @@ let callInterval = null;
 function startCall() {
   const conv = getActiveConv();
   if (!conv) { showToast('اختر محادثة أولاً', 'error'); return; }
-  if (window.KnitNative && window.KnitNative.startVoiceCall) {
-    window.KnitNative.startVoiceCall(conv.contactId || conv.id);
-    return;
-  }
+ 
   const contact = getContact(conv.contactId);
   const overlay = $('#callOverlay');
   const avatar = $('#callAvatar');
@@ -3962,8 +3959,8 @@ function startCall() {
   $('#callMute').classList.remove('active');
   $('#callMute').innerHTML = '<svg><use href="#i-mic"/></svg>';
   overlay.classList.add('active');
-  uiState.call = { startTs: null, connected: false, muted: false, speaker: false };
-  if (window.KnitNative) { window.KnitNative.startVoiceCall(conv.contactId); }
+  uiState.call = { peerId: conv.contactId || conv.id, startTs: null, connected: false, muted: false, speaker: false }; const incAct = $('#callIncomingActions'); if (incAct) incAct.hidden = true; const cEnd = $('#callEnd'); if (cEnd) cEnd.hidden = false;
+  if (window.KnitNative && window.KnitNative.startVoiceCall) { window.KnitNative.startVoiceCall(conv.contactId || conv.id); return; }
 
   setTimeout(() => {
     if (!uiState.call) return;
@@ -3999,12 +3996,12 @@ function updateCallMicState() {
   renderTwemoji(el);
 }
 
-function endCall() {
+function endCall(fromNative) {
   clearInterval(callInterval);
   callInterval = null;
   uiState.call = null;
   $('#callOverlay').classList.remove('active');
-  if (window.KnitNative) { window.KnitNative.endVoiceCall(); }
+  if (fromNative !== true && window.KnitNative && window.KnitNative.endVoiceCall) { window.KnitNative.endVoiceCall(); }
   showToast('انتهت المكالمة', 'info');
 }
 
@@ -4723,11 +4720,11 @@ function bindEvents() {
       ? '<svg><use href="#i-mic-off"/></svg>'
       : '<svg><use href="#i-mic"/></svg>';
     e.currentTarget.title = uiState.call.muted ? 'تشغيل الميكروفون' : 'كتم الميكروفون';
-    updateCallMicState();
+    updateCallMicState(); window.KnitNative?.setCallMuted?.(uiState.call.muted);
   });
   $('#callSpeaker').addEventListener('click', (e) => {
     if (!uiState.call) return;
-    uiState.call.speaker = !uiState.call.speaker;
+    uiState.call.speaker = !uiState.call.speaker; window.KnitNative?.setCallSpeaker?.(uiState.call.speaker);
     e.currentTarget.classList.toggle('active', uiState.call.speaker);
     e.currentTarget.title = uiState.call.speaker ? 'إيقاف مكبر الصوت' : 'مكبر الصوت';
     showToast(uiState.call.speaker ? 'مكبر الصوت مفعل (محاكاة)' : 'مكبر الصوت مغلق (محاكاة)', 'info', 1400);
