@@ -69,7 +69,7 @@ img { display: block; max-width: 100%; }
   --shadow-lg: 0 20px 60px rgba(0,0,0,0.7);
 }
 
-html, body { height: var(--app-h); }
+html, body { height: var(--app-h); overflow: hidden; overscroll-behavior: none; touch-action: manipulation; }
 
 body {
   font-family: var(--font);
@@ -640,7 +640,7 @@ img.emoji {
   background: var(--sidebar-bg);
   backdrop-filter: blur(30px) saturate(180%);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
-  position: relative; transition: background 0.3s var(--ease);
+  position: relative; transition: background 0.3s var(--ease); overscroll-behavior: contain; touch-action: none;
 }
 body.privacy-mode .composer {
   z-index: 60;
@@ -1235,7 +1235,7 @@ input[type="range"].slider::-moz-range-thumb {
 /* ============================================================
    RESPONSIVE
    ============================================================ */
-body.native-app { padding: 0; }
+body.native-app { padding: 0; } body.native-app .composer { padding-bottom: 10px; } body.native-app .toast-container { top: 12px; } .composer textarea, #msgInput { touch-action: pan-y; overscroll-behavior: contain; } .messages { overscroll-behavior-y: contain; touch-action: pan-y; }
 body.native-app .app { border-radius: 0; max-width: 100%; border: none; }
 body.native-app .sidebar {
   width: 100%; min-width: 100%;
@@ -1318,7 +1318,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 .composer-input.tiny-mode { -webkit-text-fill-color: transparent; }
 .composer-input.tiny-mode::placeholder { -webkit-text-fill-color: var(--text-2); }
 </style>
-</head>
+<script>(function(){try{var p=JSON.parse(localStorage.getItem('knit-ui-prefs-v2')||'{}');var t=p.theme||localStorage.getItem('knit-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(_){}})();</script></head>
 <body>
 
 <!-- SVG ICON SPRITE -->
@@ -2536,7 +2536,7 @@ function previewText(msg) {
   }
   if (msg.type === 'file') return '📎 ملف';
   if (msg.type === 'voice') return '🎤 رسالة صوتية';
-  return msg.text || '';
+  return String(msg.text || '').replace(/^\u2063TINY:(?:\d+:)?/, '');
 }
 
 /* ============================================================
@@ -2573,7 +2573,7 @@ function renderConversations() {
     const last = lastMessage(c);
     const isActive = c.id === state.activeConversationId;
     const preview = last
-      ? (last.senderId === 'me' ? 'أنت: ' : '') + (last.isTiny ? '⤓ ' : '') + previewText(last)
+      ? (last.senderId === 'me' ? 'أنت: ' : '') + ((last.isTiny || /^\u2063TINY:/.test(last.text || '')) ? '⤓ ' : '') + previewText(last)
       : 'لا توجد رسائل بعد';
     const showBadge = c.unread > 0 && !c.muted;
     const time = last ? formatConvTime(last.ts) : '';
@@ -2806,9 +2806,9 @@ function messageHtml(m, conv, searchQ) {
         <span class="voice-duration">${m.duration || 1}″</span>
       </div>`;
     if (m.text) bodyContent += `<div style="padding: 4px 0;">${highlightText(m.text, searchQ)}</div>`;
-  } else if (m.isTiny) {
-    const px = msgTinyPx(m);
-    bodyContent += `<span class="tiny-text" data-tiny-k="${(px / TINY_REF_PX).toFixed(5)}"><span class="tiny-inner">${highlightText(m.text || '', searchQ)}</span></span>`;
+  } else if (m.isTiny || /^\u2063TINY:/.test(m.text || '')) {
+    const rawTinyText = String(m.text || '').replace(/^\u2063TINY:(?:\d+:)?/, ''); const scale = Number(m.tinyScale || state.settings?.tinyScale || 80) || 80;
+    bodyContent += `<span class="tiny-text" style="font-size: clamp(11px, calc(1em * (${scale} / 100)), 0.9em); line-height: 1.35;"><span class="tiny-inner">${highlightText(rawTinyText, searchQ)}</span></span>`;
   } else {
     bodyContent += highlightText(m.text || '', searchQ);
   }
