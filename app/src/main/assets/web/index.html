@@ -436,7 +436,9 @@ body {
 }
 .msg-image img { width: 100%; display: block; transition: transform 0.3s var(--ease); }
 .msg-image:hover img { transform: scale(1.03); }
-
+.msg-bubble.image-bubble, .msg-bubble:has(> .msg-image) { padding: 3px !important; border-radius: 16px !important; }
+   .msg-bubble.image-bubble .msg-image, .msg-bubble:has(> .msg-image) .msg-image { margin-bottom: 0 !important; border-radius: 13px !important; }
+   .msg-bubble.image-bubble .msg-text, .msg-bubble:has(> .msg-image) .msg-text { padding: 5px 9px 4px; }
 .msg-file {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 4px; min-width: 180px;
@@ -1823,7 +1825,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 /* ============================================================
    KNIT NATIVE ANDROID BRIDGE
    ============================================================ */
-window.KnitBridge = {
+const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set((() => { try { return JSON.parse(localStorage.getItem(NOTIFIED_IDS_KEY) || '[]'); } catch { return []; } })()); function markMsgNotified(id) { if (!id) return; _notifiedIds.add(String(id)); try { localStorage.setItem(NOTIFIED_IDS_KEY, JSON.stringify(Array.from(_notifiedIds).slice(-500))); } catch {} } function markAllLoadedMsgsNotified() { (state.conversations || []).forEach(c => (c.messages || []).forEach(m => { if (m && m.id) _notifiedIds.add(String(m.id)); })); try { localStorage.setItem(NOTIFIED_IDS_KEY, JSON.stringify(Array.from(_notifiedIds).slice(-500))); } catch {} } window._suppressToastUntil = Date.now() + 3000; document.addEventListener('visibilitychange', () => { if (!document.hidden) { window._suppressToastUntil = Date.now() + 2500; markAllLoadedMsgsNotified(); } }); window.addEventListener('focus', () => { window._suppressToastUntil = Date.now() + 2500; markAllLoadedMsgsNotified(); });
+   (function() { let seekingWave = null; function handleWaveSeek(e) { if (!seekingWave) return; const rect = seekingWave.getBoundingClientRect(); if (!rect.width) return; const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)); const bubble = seekingWave.closest('.voice-msg, .msg-bubble'); const btn = bubble ? bubble.querySelector('[data-play-voice]') : null; const msgId = btn ? btn.dataset.playVoice : null; if (!msgId || String(msgId).startsWith('pending_')) return; const durMs = Number(seekingWave.dataset.durMs || btn?.dataset.durMs || 0); const spans = seekingWave.querySelectorAll('span'); const activeCount = Math.round(ratio * spans.length); spans.forEach((s, idx) => { s.style.opacity = idx < activeCount ? '1' : '0.35'; s.style.background = idx < activeCount ? 'currentColor' : ''; }); if (durMs > 0 && window.KnitNative && window.KnitNative.seekVoice) { window.KnitNative.seekVoice(msgId, Math.round(ratio * durMs)); } } document.addEventListener('pointerdown', (e) => { const w = e.target.closest('.voice-wave'); if (!w) return; seekingWave = w; handleWaveSeek(e); }); document.addEventListener('pointermove', (e) => { if (seekingWave) handleWaveSeek(e); }); document.addEventListener('pointerup', () => { seekingWave = null; }); document.addEventListener('pointercancel', () => { seekingWave = null; }); })(); window.KnitBridge = { onVoicePlaybackState: function(msgId, isPlaying, posMs, durMs) { const btn = document.querySelector(`[data-play-voice="${msgId}"]`); if (!btn) return; const finished = !isPlaying && durMs > 0 && posMs >= durMs - 150; const activePlaying = !!isPlaying && !finished; btn.dataset.playing = activePlaying ? '1' : '0'; if (durMs > 0) btn.dataset.durMs = String(durMs); const useEl = btn.querySelector('use'); if (useEl) useEl.setAttribute('href', activePlaying ? '#i-pause' : '#i-play'); const wrap = btn.closest('.voice-msg, .msg-bubble'); const wave = wrap ? wrap.querySelector('.voice-wave') : null; if (wave) { if (durMs > 0) wave.dataset.durMs = String(durMs); const ratio = (durMs > 0 && !finished) ? Math.max(0, Math.min(1, posMs / durMs)) : 0; const spans = wave.querySelectorAll('span'); const activeCount = Math.round(ratio * spans.length); spans.forEach((s, idx) => { s.style.opacity = idx < activeCount ? '1' : '0.35'; s.style.background = idx < activeCount ? 'currentColor' : ''; }); } const durEl = wrap ? wrap.querySelector('.voice-duration') : null; if (durEl && durMs > 0) { const showSec = Math.max(0, Math.round((activePlaying ? Math.max(0, durMs - posMs) : durMs) / 1000)); durEl.textContent = showSec + '"'; } },
   onAttachmentStaged: function(token, name, size, mime, thumb) {
     uiState.pendingAttachment = {
       token: token,
@@ -1936,7 +1939,7 @@ window.KnitBridge = {
           const prevConv = state.conversations.find(c => c.id === prevActiveId);
           if (prevConv) incomingConvs.push(prevConv);
         }
-        state.conversations = incomingConvs;
+        state.conversations = incomingConvs; window._suppressToastUntil = Date.now() + 2500; markAllLoadedMsgsNotified();
       }
       if (typeof data.requestCount === 'number') state.requestCount = data.requestCount;
       if (typeof data.meshEnabled === 'boolean') state.meshEnabled = data.meshEnabled;
@@ -2118,7 +2121,7 @@ window.KnitBridge = {
         }
       }
 
-      const existingIdx = conv.messages.findIndex(m => m.id === msg.id);
+      const existingIdx = conv.messages.findIndex(m => m.id === msg.id); const isBrandNew = existingIdx < 0;
       if (existingIdx >= 0) {
         conv.messages[existingIdx] = msg;
       } else {
@@ -2128,7 +2131,7 @@ window.KnitBridge = {
         }
       }
       renderAll();
-      if (state.activeConversationId !== conv.id && !conv.muted) {
+      if (isBrandNew && msg.senderId !== 'me' && !msg.read && !msg.pending && !_notifiedIds.has(String(msg.id)) && Date.now() >= (window._suppressToastUntil || 0) && state.activeConversationId !== conv.id && !conv.muted) { markMsgNotified(msg.id);
         const contact = getContact(conv.contactId);
         showToast((contact ? contact.name : 'رسالة جديدة') + ': ' + previewText(msg).slice(0, 40), 'info', 3000);
         playNotificationSound();
@@ -2833,7 +2836,7 @@ function messageHtml(m, conv, searchQ) {
 
   return `
     <div class="${classes.join(' ')}" data-msg-id="${m.id}" data-sender-id="${m.senderId}">
-      <div class="msg-bubble ${emojiOnly ? 'emoji-only' : ''}">${bodyContent}</div>
+      <div class="msg-bubble ${emojiOnly ? 'emoji-only' : ''}${m.type === 'image' && !m.viewOnce ? ' image-bubble' : ''}">${bodyContent}</div>
       ${progressHtml}
       ${reactionsHtml}
       <div class="msg-meta">
@@ -2923,9 +2926,10 @@ function showContextMenu(x, y, items) {
   }).join('');
   menu.classList.add('active');
   const rect = menu.getBoundingClientRect();
-  let px = x, py = y;
-  if (px + rect.width > window.innerWidth - 8) px = window.innerWidth - rect.width - 8;
-  if (py + rect.height > window.innerHeight - 8) py = window.innerHeight - rect.height - 8;
+  const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth; const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight; const bubbleEl = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(el => el.closest && el.closest('.msg-bubble, .msg-row')).find(Boolean); const bRect = bubbleEl ? bubbleEl.getBoundingClientRect() : null;
+   let px = x, py = y;
+  if (bRect) { py = (bRect.bottom + 8 + rect.height <= vh - 12) ? (bRect.bottom + 8) : (bRect.top - 8 - rect.height >= 12 ? bRect.top - 8 - rect.height : vh - rect.height - 12); } else if (py + rect.height > vh - 12) { py = y - rect.height; }
+  px = Math.max(12, Math.min(px, vw - rect.width - 12)); py = Math.max(12, Math.min(py, vh - rect.height - 12));
   menu.style.left = px + 'px';
   menu.style.top = py + 'px';
   uiState.activeContext = { items, resolve: (action) => {
@@ -2982,7 +2986,7 @@ function sendMessage() {
       sending: true,
       delivered: false,
       read: false,
-      failed: false
+      failed: false, isTiny: !!isTiny, tinyScale: Number(state.settings.tinyScale) || 80
     };
     conv.messages.push(tempMsg);
     renderMessages();
@@ -3880,7 +3884,7 @@ function initMessageGestures() {
     if (voiceBtn) {
       const msgId = voiceBtn.dataset.playVoice;
       if (window.KnitNative && window.KnitNative.playVoiceMessage && !String(msgId).startsWith('pending_')) {
-        window.KnitNative.playVoiceMessage(msgId);
+        if (voiceBtn.dataset.playing === '1' && window.KnitNative.pauseVoice) { window.KnitNative.pauseVoice(); } else { window.KnitNative.playVoiceMessage(msgId); }
         return;
       }
       const conv = getActiveConv();
@@ -4865,9 +4869,9 @@ function showMsgContextMenu(msgId, x, y) {
   menu.classList.add('active');
 
   const rect = menu.getBoundingClientRect();
-  let px = x, py = y;
-  if (px + rect.width > window.innerWidth - 8) px = window.innerWidth - rect.width - 8;
-  if (py + rect.height > window.innerHeight - 8) py = window.innerHeight - rect.height - 8;
+  let px = x, py = y; const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth; const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight; const bubbleEl = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(el => el.closest && el.closest('.msg-bubble, .msg-row')).find(Boolean); const bRect = bubbleEl ? bubbleEl.getBoundingClientRect() : null;
+  if (bRect) { py = (bRect.bottom + 8 + rect.height <= vh - 12) ? (bRect.bottom + 8) : (bRect.top - 8 - rect.height >= 12 ? bRect.top - 8 - rect.height : vh - rect.height - 12); } else if (py + rect.height > vh - 12) { py = y - rect.height; }
+  px = Math.max(12, Math.min(px, vw - rect.width - 12)); py = Math.max(12, Math.min(py, vh - rect.height - 12));
   if (px < 8) px = 8;
   if (py < 8) py = 8;
   menu.style.left = px + 'px';
