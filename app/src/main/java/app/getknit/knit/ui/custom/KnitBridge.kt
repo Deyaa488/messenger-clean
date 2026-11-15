@@ -184,6 +184,7 @@ class KnitBridge(
     private val callManager: CallManager? = null,
     private val initialConversationId: String? = null,
 ) {
+    private val ackedReadMessageIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val mainHandler = Handler(Looper.getMainLooper())
     private val json =
@@ -726,22 +727,42 @@ class KnitBridge(
         }
     }
 
-    @JavascriptInterface
+  @JavascriptInterface
     fun markConversationRead(conversationId: String) {
+        markMessageRead(conversationId, "")
+    }
+
+    @JavascriptInterface
+    fun markMessageRead(conversationId: String, messageId: String) {
         if (conversationId.isBlank()) return
         scope.launch(Dispatchers.IO) {
             try {
                 val newest = messageRepository.newestSentAt(conversationId) ?: System.currentTimeMillis()
                 settingsStore.setLastReadAt(conversationId, maxOf(newest, System.currentTimeMillis()))
-                val myNodeId = identity.nodeId(); val msgs = messageRepository.observeNewestMessages(conversationId, 30).first(); val latestIncoming = msgs.filter { it.senderId != myNodeId }.maxByOrNull { it.arrivedAt ?: it.sentAt }; if (latestIncoming != null && Conversations.kindFor(conversationId) == ConversationKind.DM) { val existingReactions = reactionRepository.observeReactionsIn(conversationId).first(); val alreadyAcked = existingReactions.any { it.messageId == latestIncoming.id && it.reactorNodeId == myNodeId && it.emoji == "\u2063READ\u2063" }; if (!alreadyAcked) { meshController.sendReaction(messageId = latestIncoming.id, emoji = "\u2063READ\u2063", recipientId = conversationId, group = null) } }
+                if (Conversations.kindFor(conversationId) == ConversationKind.DM) {
+                    val myNodeId = identity.nodeId()
+                    val msgs = messageRepository.observeNewestMessages(conversationId, 40).first()
+                    val targetMsg = if (messageId.isNotBlank()) {
+                        msgs.find { it.id == messageId && it.senderId != myNodeId }
+                    } else null
+                    val incomingToAck = targetMsg ?: msgs.filter { it.senderId != myNodeId }.maxByOrNull { it.arrivedAt ?: it.sentAt }
+                    if (incomingToAck != null && ackedReadMessageIds.add("$conversationId:${incomingToAck.id}")) {
+                        val existingReactions = reactionRepository.observeReactionsIn(conversationId).first()
+                        val alreadyAcked = existingReactions.any { it.messageId == incomingToAck.id && it.reactorNodeId == myNodeId && it.emoji == "\u2063READ\u2063" }
+                        if (!alreadyAcked) {
+                            meshController.sendReaction(
+                                messageId = incomingToAck.id,
+                                emoji = "\u2063READ\u2063",
+                                recipientId = conversationId,
+                                group = null,
+                            )
+                        }
+                    }
+                }
             } catch (e: Exception) {
-                Log.e(KNIT_UI_TAG, "Error marking conversation read", e)
+                Log.e(KNIT_UI_TAG, "Error marking conversation/message read", e)
             }
         }
-    }
-    @JavascriptInterface
-    fun markMessageRead(conversationId: String, messageId: String) {
-        if (conversationId.isNotBlank() && messageId.isNotBlank() && Conversations.kindFor(conversationId) == ConversationKind.DM) { scope.launch(Dispatchers.IO) { try { val myNodeId = identity.nodeId(); val existingReactions = reactionRepository.observeReactionsIn(conversationId).first(); val alreadyAcked = existingReactions.any { it.messageId == messageId && it.reactorNodeId == myNodeId && it.emoji == "\u2063READ\u2063" }; if (!alreadyAcked) { meshController.sendReaction(messageId = messageId, emoji = "\u2063READ\u2063", recipientId = conversationId, group = null) } } catch (_: Exception) {} } }; markConversationRead(conversationId)
     }
     
     @JavascriptInterface
@@ -1519,15 +1540,20 @@ class KnitBridge(
                     }
                 val recipientId = if (kind == ConversationKind.DM) msg.conversationId else null
 
+              val myNodeId = identity.nodeId()
+                val existingReactions = reactionRepository.observeReactionsIn(msg.conversationId).first()
+                val alreadyHas = existingReactions.any { it.messageId == msg.id && it.reactorNodeId == myNodeId && it.emoji == emoji }
+                val targetEmoji = if (alreadyHas) "" else emoji
+                val added = !alreadyHas
                 meshController.sendReaction(
                     messageId = msg.id,
-                    emoji = emoji,
+                    emoji = targetEmoji,
                     recipientId = recipientId,
                     group = groupInfo,
                 )
                 evaluateJs(
                     "if (window.KnitBridge) window.KnitBridge.onReactionConfirmed(" +
-                        "'${escapeJs(msg.conversationId)}', '${escapeJs(msg.id)}', '${escapeJs(emoji)}');",
+                        "'${escapeJs(msg.conversationId)}', '${escapeJs(msg.id)}', '${escapeJs(emoji)}', $added);",
                 )
             } catch (e: Exception) {
                 evaluateJs(
