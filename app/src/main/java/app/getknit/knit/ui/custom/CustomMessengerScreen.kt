@@ -277,7 +277,18 @@ fun CustomMessengerScreen(
         webView.evaluateJavascript(
             """
             (function() {
-                var activeModal = document.querySelector('.modal-overlay.active');
+               const imgv = document.getElementById('imageViewer');
+               if (imgv && imgv.classList.contains('active')) {
+                   if (window.closeImageViewer) window.closeImageViewer();
+                   else imgv.classList.remove('active');
+                   return true;
+               }
+               const ctxm = document.getElementById('contextMenu');
+               if (ctxm && ctxm.classList.contains('open')) {
+                   ctxm.classList.remove('open');
+                   return true;
+               }
+               var activeModal = document.querySelector('.modal-overlay.active');
                 if (activeModal) {
                     if (typeof closeAllModals === 'function') closeAllModals();
                     else activeModal.classList.remove('active');
