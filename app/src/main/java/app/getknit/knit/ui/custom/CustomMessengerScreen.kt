@@ -284,8 +284,8 @@ fun CustomMessengerScreen(
                    return true;
                }
                const ctxm = document.getElementById('contextMenu');
-               if (ctxm && ctxm.classList.contains('open')) {
-                   ctxm.classList.remove('open');
+               if (ctxm && (ctxm.classList.contains('active') || ctxm.classList.contains('open'))) {
+                   if (window.hideContextMenu) window.hideContextMenu(); else ctxm.classList.remove('active', 'open');
                    return true;
                }
                var activeModal = document.querySelector('.modal-overlay.active');
@@ -294,7 +294,7 @@ fun CustomMessengerScreen(
                     else activeModal.classList.remove('active');
                     return true;
                 }
-                if (typeof closeChatOnMobile === 'function' && document.getElementById('sidebar') && document.getElementById('sidebar').classList.contains('hidden')) {
+                var ep = document.querySelector('#emojiPicker.active'); if (ep) { ep.classList.remove('active'); return true; } if (typeof closeChatOnMobile === 'function' && document.getElementById('sidebar') && document.getElementById('sidebar').classList.contains('hidden')) {
                     closeChatOnMobile();
                     return true;
                 }
