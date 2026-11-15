@@ -1875,19 +1875,20 @@ const NOTIFIED_IDS_KEY = 'knit-notified-ids-v1'; const _notifiedIds = new Set(((
     showToast(reason || 'فشل إرسال الرسالة عبر شبكة الراديو', 'error', 3500);
   },
 
-  onReactionConfirmed: function(convId, msgId, emoji) {
+  onReactionConfirmed: function(convId, msgId, emoji, added) {
     const conv = getConversation(convId);
     if (!conv) return;
     const msg = conv.messages.find(m => m.id === msgId);
     if (!msg) return;
     if (!Array.isArray(msg.reactions)) msg.reactions = [];
     const idx = msg.reactions.indexOf(emoji);
-    if (idx >= 0) {
-      msg.reactions.splice(idx, 1);
-    } else {
-      msg.reactions.push(emoji);
-    }
-    if (state.activeConversationId === conv.id) renderMessages();
+    const shouldAdd = (typeof added === 'boolean') ? added : (idx < 0);
+      if (shouldAdd && idx < 0) {
+        msg.reactions.push(emoji);
+      } else if (!shouldAdd && idx >= 0) {
+        msg.reactions.splice(idx, 1);
+      }
+    if (state.activeConversationId === conv.id) renderMessages(false);
   },
 
   onReactionFailed: function(msgId, reason) {
@@ -2667,13 +2668,13 @@ function renderChat() {
   if (isTypingNow) showTypingIndicator(true);
 }
 
-function sortMessagesCausally(list) { const byTs = [...(list || [])].sort((a, b) => (Number(a.ts || a.sentAt) || 0) - (Number(b.ts || b.sentAt) || 0)); const byId = new Map(byTs.map(m => [m.id, m])); const res = [], visited = new Set(), visiting = new Set(); function visit(m) { if (!m || visited.has(m.id) || visiting.has(m.id)) return; visiting.add(m.id); const pid = typeof m.replyTo === 'string' ? m.replyTo : m.replyTo?.id; if (pid && byId.has(pid)) visit(byId.get(pid)); visiting.delete(m.id); visited.add(m.id); res.push(m); } for (const m of byTs) visit(m); return res; } function checkVisibleMessagesAndMarkRead() { const conv = getActiveConv(); if (!conv || document.hidden) return; const el = $('#messages'); if (!el || el.offsetParent === null) return; const incoming = (conv.messages || []).filter(m => m.senderId !== 'me' && !m.deletedForMe); if (!incoming.length) return; const lastMsg = incoming[incoming.length - 1]; const row = el.querySelector('.msg-row[data-msg-id="' + lastMsg.id + '"]') || el.querySelector('[data-msg-id="' + lastMsg.id + '"]'); if (!row) return; const er = el.getBoundingClientRect(), rr = row.getBoundingClientRect(); if (rr.bottom > er.top && rr.top < er.bottom) { window.KnitNative?.markMessageRead ? window.KnitNative.markMessageRead(state.activeConversationId, lastMsg.id) : window.KnitNative?.markConversationRead?.(state.activeConversationId); } } function renderMessages() {
+function sortMessagesCausally(list) { const byTs = [...(list || [])].sort((a, b) => (Number(a.ts || a.sentAt) || 0) - (Number(b.ts || b.sentAt) || 0)); const byId = new Map(byTs.map(m => [m.id, m])); const res = [], visited = new Set(), visiting = new Set(); function visit(m) { if (!m || visited.has(m.id) || visiting.has(m.id)) return; visiting.add(m.id); const pid = typeof m.replyTo === 'string' ? m.replyTo : m.replyTo?.id; if (pid && byId.has(pid)) visit(byId.get(pid)); visiting.delete(m.id); visited.add(m.id); res.push(m); } for (const m of byTs) visit(m); return res; } function checkVisibleMessagesAndMarkRead() { const conv = getActiveConv(); if (!conv || document.hidden) return; const el = $('#messages'); if (!el || el.offsetParent === null) return; const incoming = (conv.messages || []).filter(m => m.senderId !== 'me' && !m.deletedForMe); if (!incoming.length) return; const lastMsg = incoming[incoming.length - 1]; const row = el.querySelector('.msg-row[data-msg-id="' + lastMsg.id + '"]') || el.querySelector('[data-msg-id="' + lastMsg.id + '"]'); if (!row) return; const er = el.getBoundingClientRect(), rr = row.getBoundingClientRect(); if (rr.bottom > er.top && rr.top < er.bottom) { const acked = (uiState.ackedReadIds = uiState.ackedReadIds || new Set()); if (acked.has(lastMsg.id)) return; acked.add(lastMsg.id); window.KnitNative?.markMessageRead ? window.KnitNative.markMessageRead(state.activeConversationId, lastMsg.id) : window.KnitNative?.markConversationRead?.(state.activeConversationId); } } function renderMessages(forceScrollBottom) {
   const conv = getActiveConv();
   const container = $('#messages');
   if (!conv) { container.innerHTML = ''; return; }
   const q = uiState.chatSearch.trim().toLowerCase();
   const visibleMessages = sortMessagesCausally(conv.messages.filter(m => !m.deletedForMe));
-  container.innerHTML = visibleMessages.map(m => messageHtml(m, conv, q)).join('');
+  const convChanged = container.dataset.renderedConvId !== String(conv.id); container.dataset.renderedConvId = String(conv.id); const prevScrollTop = container.scrollTop; const prevScrollHeight = container.scrollHeight; const wasNearBottom = convChanged || forceScrollBottom === true || (prevScrollHeight - prevScrollTop - container.clientHeight < 110); container.innerHTML = visibleMessages.map(m => messageHtml(m, conv, q)).join('');
   // re-renders (status ticks etc.) must not replay the entrance animation of messages already on screen
   const seen = (uiState.seenMsgIds = uiState.seenMsgIds || new Set());
   $$('.msg', container).forEach(el => { const id = el.dataset.msgId; if (seen.has(id)) el.classList.add('no-anim'); else seen.add(id); });
@@ -2683,7 +2684,7 @@ function sortMessagesCausally(list) { const byTs = [...(list || [])].sort((a, b)
     $$('.msg.tiny .tiny-text', container).forEach(el => {
     });
     layoutTinyTexts(container);
-    container.scrollTop = container.scrollHeight; checkVisibleMessagesAndMarkRead();
+    if (wasNearBottom) { container.scrollTop = container.scrollHeight; } else { container.scrollTop = Math.max(0, prevScrollTop + (container.scrollHeight - prevScrollHeight)); } checkVisibleMessagesAndMarkRead();
   });
 }
 
