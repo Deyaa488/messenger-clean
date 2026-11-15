@@ -3541,8 +3541,18 @@ function addContact(name, status, behavior) {
   save();
   return contact;
 }
-function openChatOnMobile() { const sb = $('#sidebar'); if (sb) sb.classList.add('hidden'); }
-function closeChatOnMobile() { $('#sidebar').classList.remove('hidden'); if (window.KnitNative && window.KnitNative.onMobileChatClosed) window.KnitNative.onMobileChatClosed(); }
+function cleanupTransientUI() {
+      clearTimeout(uiState.longPressTimer);
+      uiState.longPressTimer = null;
+      if (window.resetMessageGestures) window.resetMessageGestures();
+      hideContextMenu();
+      const ep = $('#emojiPicker'); if (ep) ep.classList.remove('active');
+      const iv = $('#imageViewer'); if (iv && iv.classList.contains('active')) { if (window.closeImageViewer) window.closeImageViewer(); else iv.classList.remove('active'); }
+      $$('.msg.magnifying').forEach(el => el.classList.remove('magnifying'));
+    }
+    window.cleanupTransientUI = cleanupTransientUI;
+    function openChatOnMobile() { cleanupTransientUI(); const sb = $('#sidebar'); if (sb) sb.classList.add('hidden'); }
+function closeChatOnMobile() { cleanupTransientUI(); $('#sidebar').classList.remove('hidden'); if (window.KnitNative && window.KnitNative.onMobileChatClosed) window.KnitNative.onMobileChatClosed(); }
 
 /* ============================================================
    VIEWPORT
@@ -3654,7 +3664,6 @@ function initMessageGestures() {
         g.mode = 'magnify';
         g.decided = true;
         g.msgEl.classList.add('magnifying');
-        try { container.setPointerCapture(g.pointerId); } catch (err) {}
         if (navigator.vibrate) navigator.vibrate(6);
       }, MAGNIFY_HOLD_MS);
     } else {
@@ -3678,7 +3687,7 @@ function initMessageGestures() {
     g.dy = e.clientY - g.startY;
 
     if (g.mode === 'magnify') {
-      if (e.cancelable) e.preventDefault();
+      if (Math.abs(g.dy) > 10) finishGesture(false);
       return;
     }
 
@@ -3897,14 +3906,7 @@ function initMessageGestures() {
 
     // Tap on tiny → context menu (not magnify)
     const tinyMsg = e.target.closest('.msg.tiny');
-    if (tinyMsg) {
-      if (gesture) return;
-      const rect = tinyMsg.getBoundingClientRect();
-      setTimeout(() => {
-        if (gesture) return;
-        showMsgContextMenu(tinyMsg.dataset.msgId, Math.max(8, rect.left + rect.width / 2 - 95), rect.bottom + 6);
-      }, 10);
-    }
+    if (tinyMsg) { if (gesture) return; tinyMsg.classList.toggle('magnifying'); }
   });
 
   // Right-click for normal messages (desktop)
@@ -4208,7 +4210,7 @@ function bindEvents() {
   convList.addEventListener('click', (e) => {
     const item = e.target.closest('.conv-item');
     if (!item) return;
-    const id = item.dataset.convId;
+    cleanupTransientUI(); const id = item.dataset.convId;
     const conv = getConversation(id);
     if (!conv) return;
     state.activeConversationId = id;
@@ -4243,8 +4245,8 @@ function bindEvents() {
     const item = e.target.closest('.conv-item');
     if (!item) return;
     const x = e.touches[0].clientX, y = e.touches[0].clientY;
-    uiState.longPressTimer = setTimeout(() => {
-      showConvContextMenu(item.dataset.convId, x, y);
+    clearTimeout(uiState.longPressTimer); uiState.longPressTimer = setTimeout(() => {
+      if ($('#sidebar')?.classList.contains('hidden')) return; showConvContextMenu(item.dataset.convId, x, y);
     }, 500);
   }, { passive: true });
   ['touchend','touchmove','touchcancel'].forEach(ev => {
@@ -4699,7 +4701,7 @@ function bindEvents() {
   });
 
   document.addEventListener('click', (e) => {
-    if (!e.target.closest('#contextMenu') && !e.target.closest('.icon-btn')) hideContextMenu();
+    if (!e.target.closest('#contextMenu') && !e.target.closest('#chatMoreBtn') && !e.target.closest('#attachBtn')) hideContextMenu();
     if (!e.target.closest('#emojiPicker') && !e.target.closest('#emojiBtn')) {
       $('#emojiPicker').classList.remove('active');
     }
