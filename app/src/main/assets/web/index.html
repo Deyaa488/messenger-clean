@@ -1319,7 +1319,11 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 .composer-input.tiny-mode { -webkit-text-fill-color: transparent; }
 .composer-input.tiny-mode::placeholder { -webkit-text-fill-color: var(--text-2); }
-</style>
+.tiny-text[data-tiny-k] { display: inline-block; position: relative; overflow: hidden; font-size: 14px; line-height: 1.25; vertical-align: middle; } .tiny-text[data-tiny-k] .tiny-inner { position: absolute; top: 0; inset-inline-start: 0; display: block; width: max-content; max-width: 100%; white-space: pre-wrap; word-break: break-word; }
+<*, *::before, *::after { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; }
+   input, textarea, [contenteditable="true"] { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }
+   #settingsModal.modal-overlay { padding: 0 !important; background: var(--bg) !important; align-items: stretch !important; } #settingsModal > .modal { width: 100% !important; max-width: 100% !important; height: 100% !important; max-height: 100% !important; border-radius: 0 !important; border: none !important; box-shadow: none !important; display: flex !important; flex-direction: column !important; } #settingsModal .modal-body { flex: 1 !important; overflow-y: auto !important; max-height: none !important; }
+   /style>
 <script>(function(){try{var p=JSON.parse(localStorage.getItem('knit-ui-prefs-v2')||'{}');var t=p.theme||localStorage.getItem('knit-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(_){}})();</script></head>
 <body>
 
@@ -1403,7 +1407,7 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
     <div id="nearbyPeersBar" hidden style="padding: 6px 12px 8px; border-bottom: 1px solid var(--border);">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-        <span style="font-size:11.5px; font-weight:700; color:var(--accent);">📡 الأجهزة المكتشفة وجهات الاتصال</span>
+        <span style="font-size:11.5px; font-weight:700; color:var(--accent);">الأجهزة المتصلة</span>
         <span id="nearbyPeersCountBadge" style="font-size:11px; color:var(--text-2);">0</span>
       </div>
       <div id="nearbyPeersChips" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; scrollbar-width:none;"></div>
@@ -2385,7 +2389,7 @@ function tinyOpacityValue(v) { // 0 -> near-invisible but still findable/tappabl
   return Math.max(0.04, Math.min(1, v / 100));
 }
 function layoutTinyTexts(root) {
-  $$('.msg.tiny .tiny-text', root || document).forEach(el => {
+  $$('.tiny-text[data-tiny-k]', root || document).forEach(el => {
     const inner = el.firstElementChild; if (!inner) return;
     const k = Math.max(0.0005, parseFloat(el.dataset.tinyK) || 0.5);
     const host = el.closest('.messages') || document.body;
@@ -2584,7 +2588,8 @@ function renderConversations() {
     const time = last ? formatConvTime(last.ts) : '';
     const isCommunity = (c.id === 'nearby' || c.isRoom); const finalDisplayName = isCommunity ? '\u0627\u0644\u0645\u062C\u062A\u0645\u0639' : convDisplayName; const [c1, c2] = isCommunity ? ['#0ea5e9', '#6366f1'] : getAvatarGradient(finalDisplayName);
     const avatarStyle = isCommunity ? 'background:linear-gradient(135deg, #0ea5e9, #6366f1);' : (contact.avatar ? 'background:#eee;' : `background:linear-gradient(135deg,${c1},${c2});`);
-    return `
+  let previewHtml = escapeHtml(preview); if (last && (last.isTiny || /^\u2063TINY/.test(last.text || ''))) { const sc = clampTinyScale(state.settings?.tinyScale ?? 80); const tk = Math.max(0.0005, tinyScaleToPx(sc) / TINY_REF_PX); const mePrefix = last.senderId === 'me' ? 'أنت: ' : ''; previewHtml = `${mePrefix}<span class="tiny-text" data-tiny-scale="${sc}" data-tiny-k="${tk}"><span class="tiny-inner" style="transform:scale(${tk});">${escapeHtml(previewText(last))}</span></span>`; }
+                                                                                                            return `
       <div class="conv-item ${isActive ? 'active' : ''}" data-conv-id="${c.id}">
         <div class="avatar-wrap">
           <div class="avatar" style="${avatarStyle}">
@@ -2603,14 +2608,15 @@ function renderConversations() {
           <div class="conv-bottom">
             <div class="conv-preview">
               ${c.muted ? '<svg style="width:12px;height:12px;opacity:0.6;"><use href="#i-bell-off"/></svg>' : ''}
-              ${escapeHtml(preview)}
+              ${previewHtml}
             </div>
             ${showBadge ? `<div class="conv-badge">${c.unread}</div>` : ''}
           </div>
         </div>
       </div>`;
   }).join('');
-}
+  requestAnimationFrame(() => layoutTinyTexts(list));
+             }
 
 /* ============================================================
    RENDER: Chat
@@ -2740,11 +2746,12 @@ function messageHtml(m, conv, searchQ) {
       if (origPreview.length > 60) origPreview = origPreview.slice(0, 60) + '…';
       const thumb = (orig.type === 'image' && orig.data && !orig.viewOnce && !orig.deleted)
         ? `<img class="msg-reply-thumb" src="${orig.data}" alt=""/>` : '';
-      bodyContent += `
+        let origReplyHtml = escapeHtml(origPreview); if (!orig.deleted && (orig.isTiny || /^\u2063TINY/.test(orig.text || ''))) { const sc = clampTinyScale(state.settings?.tinyScale ?? 80); const tk = Math.max(0.0005, tinyScaleToPx(sc) / TINY_REF_PX); const cleanOrigPreview = (orig.text || '').replace(/^\u2063TINY(?::\d+)?\u2063/, ''); const clipped = cleanOrigPreview.length > 60 ? cleanOrigPreview.slice(0, 60) + '…' : cleanOrigPreview; origReplyHtml = `<span class="tiny-text" data-tiny-scale="${sc}" data-tiny-k="${tk}"><span class="tiny-inner" style="transform:scale(${tk});">${escapeHtml(clipped)}</span></span>`; }
+                                                                                                                                 bodyContent += `
         <div class="msg-reply" data-jump-to="${orig.id}">${thumb}
           <div class="msg-reply-body">
             <div class="msg-reply-name">${escapeHtml(origSender)}</div>
-            <div class="msg-reply-text">${escapeHtml(origPreview)}</div>
+            <div class="msg-reply-text">${origReplyHtml}</div>
           </div>
         </div>`;
     }
@@ -3108,7 +3115,7 @@ function copyMessage(msgId) {
   const conv = getActiveConv();
   const msg = conv?.messages.find(m => m.id === msgId);
   if (!msg) return;
-  const text = msg.text || '';
+  const text = (msg.text || '').replace(/^\u2063TINY(?::\d+)?\u2063/, '');
   if (!text) { showToast('لا يوجد نص لنسخه', 'info'); return; }
   navigator.clipboard?.writeText(text).then(() => {
     showToast('تم نسخ النص', 'success');
@@ -3168,7 +3175,7 @@ function updateReplyPreview() {
   const contact = getContact(conv.contactId);
   const senderName = msg.senderId === 'me' ? state.currentUser.name : contact.name;
   $('#replyPreviewName').textContent = senderName; let rThumb = el.querySelector('.reply-preview-thumb'); if (msg.type === 'image' && msg.data && !msg.viewOnce) { if (!rThumb) { rThumb = document.createElement('img'); rThumb.className = 'reply-preview-thumb'; rThumb.style.cssText = 'width:34px;height:34px;border-radius:6px;object-fit:cover;margin-inline-end:8px;flex-shrink:0;'; el.insertBefore(rThumb, el.firstChild); } rThumb.src = msg.data; rThumb.hidden = false; } else if (rThumb) { rThumb.hidden = true; }
-  $('#replyPreviewText').textContent = (msg.isTiny ? '⤓ ' : '') + previewText(msg);
+  if (msg.isTiny || /^\u2063TINY/.test(msg.text || '')) { const sc = clampTinyScale(state.settings?.tinyScale ?? 80); const tk = Math.max(0.0005, tinyScaleToPx(sc) / TINY_REF_PX); $('#replyPreviewText').innerHTML = `<span class="tiny-text" data-tiny-scale="${sc}" data-tiny-k="${tk}"><span class="tiny-inner" style="transform:scale(${tk});">${escapeHtml(previewText(msg))}</span></span>`; requestAnimationFrame(() => layoutTinyTexts(el)); } else { $('#replyPreviewText').textContent = previewText(msg); }
   el.hidden = false;
 }
 
@@ -3445,7 +3452,7 @@ function renderNearbyPeersBar() {
   const chips = $('#nearbyPeersChips');
   const badge = $('#nearbyPeersCountBadge');
   if (!bar || !chips) return;
-  const peers = (state.contacts || []).filter(c => c.id !== 'nearby' && !c.isRoom && !c.isGroup);
+  const peers = (state.contacts || []).filter(p => p && p.online && !p.isGroup && !p.isRoom && p.id !== 'nearby');
   if (peers.length === 0) {
     bar.hidden = true;
     return;
@@ -4181,10 +4188,11 @@ function updateTinySizePreview() {
    EVENT BINDINGS
    ============================================================ */
 function bindEvents() {
-  $('#newChatBtn').addEventListener('click', () => {
+  document.addEventListener('selectstart', (e) => { if (!e.target.closest('input, textarea')) e.preventDefault(); });
+   $('#newChatBtn').addEventListener('click', () => {
     renderNewChatList();
     openModal('newChatModal');
-    setTimeout(() => $('#newChatSearch').focus(), 100);
+    
   });
   $('#settingsBtn').addEventListener('click', () => {
     renderWallpaperGrid();
@@ -4404,7 +4412,7 @@ function bindEvents() {
     if (picker.classList.contains('active')) {
       $('#emojiSearch').value = '';
       renderEmojiPicker();
-      setTimeout(() => $('#emojiSearch').focus(), 50);
+      document.activeElement?.blur?.();
     }
   });
   $('#emojiPicker')?.addEventListener('click', (e) => e.stopPropagation()); $('#emojiCats').addEventListener('click', (e) => { e.stopPropagation();
@@ -4425,7 +4433,7 @@ function bindEvents() {
     const val = input.value;
     input.value = val.slice(0, start) + emoji + val.slice(end);
     input.selectionStart = input.selectionEnd = start + emoji.length;
-    input.focus();
+    
     updateSendBtn();
   });
 
@@ -4624,7 +4632,7 @@ function bindEvents() {
   $('#tinySizeSlider').addEventListener('input', () => {
     state.settings.tinyScale = clampTinyScale($('#tinySizeSlider').value);
     updateTinySizePreview();
-    if (uiState.tinyMode) updateTinyModeUI(); const k = Math.max(0.0005, tinyScaleToPx(state.settings.tinyScale) / TINY_REF_PX); document.querySelectorAll('.msg.tiny .tiny-text').forEach(el => { el.dataset.tinyK = String(k); }); layoutTinyTexts();
+    if (uiState.tinyMode) updateTinyModeUI(); const k = Math.max(0.0005, tinyScaleToPx(state.settings.tinyScale) / TINY_REF_PX); document.querySelectorAll('.tiny-text[data-tiny-k]').forEach(el => { el.dataset.tinyK = String(k); }); layoutTinyTexts();
     saveDebounced();
   });
   $('#tinyOpacitySlider').addEventListener('input', () => {
@@ -4743,7 +4751,7 @@ window.closeImageViewer = function() { $('#imageViewer')?.classList.remove('acti
     if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); $('#searchInput').focus(); }
     if (mod && e.key.toLowerCase() === 'n') {
       e.preventDefault(); renderNewChatList(); openModal('newChatModal');
-      setTimeout(() => $('#newChatSearch').focus(), 100);
+      
     }
     if (mod && e.key === ',') { e.preventDefault(); renderWallpaperGrid(); openModal('settingsModal'); }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'p') { e.preventDefault(); togglePrivacy(); }
