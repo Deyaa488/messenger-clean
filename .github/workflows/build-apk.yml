@@ -60,7 +60,9 @@ jobs:
 
       - name: Verify Produced APKs
         run: |
-          ls -lh app/build/outputs/apk/staging/*.apk app/build/outputs/apk/debug/*.apk
+          ls -lh app/build/outputs/apk/staging/*.apk app/build/outputs/apk/debug/*.apk 
+          APK_PATH=$(ls app/build/outputs/apk/staging/app-staging.apk 2>/dev/null || ls app/build/outputs/apk/staging/*.apk | head -n 1) && unzip -p "$APK_PATH" assets/web/index.html > /tmp/apk-index.html
+          node -e 'const fs=require("fs");for(const p of ["app/src/main/assets/web/index.html","/tmp/apk-index.html"]){const h=fs.readFileSync(p,"utf8");for(const t of ["style","script","body"]){const o=(h.match(new RegExp("<"+t+"(?:\\s|>)","gi"))||[]).length,c=(h.match(new RegExp("</"+t+">","gi"))||[]).length;console.log(p,t,"open="+o,"close="+c);if(o!==c||o===0)throw new Error(p+" unbalanced "+t);}const m=[...h.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];m.forEach((x,i)=>{if(x[1].trim()){new (require("vm")).Script(x[1]);console.log(p,"script#"+i,"OK","len="+x[1].length);}});}'
 
       - name: Upload Optimized Staging APK
         uses: actions/upload-artifact@v4
