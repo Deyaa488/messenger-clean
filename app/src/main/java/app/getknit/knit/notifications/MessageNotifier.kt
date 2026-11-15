@@ -135,7 +135,7 @@ class MessageNotifier internal constructor(
         selfName: String,
         selfAvatarBytes: ByteArray?,
     ) {
-        if (incoming.text.contains("\u2063READ\u2063")) return
+        if (incoming.body.contains("\u2063READ\u2063")) return
         // The user is already looking at this conversation — nothing to surface.
         if (incoming.conversationId == visibleConversationId) return
         val self = Self(selfId, selfName, selfAvatarBytes).also { lastSelf = it }
