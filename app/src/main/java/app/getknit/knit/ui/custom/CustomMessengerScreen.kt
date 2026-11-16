@@ -176,7 +176,7 @@ fun CustomMessengerScreen(
                     allowFileAccess = true
                     allowContentAccess = true
                     mediaPlaybackRequiresUserGesture = false
-                    cacheMode = WebSettings.LOAD_NO_CACHE
+                    cacheMode = WebSettings.LOAD_DEFAULT
                     // Keep mobile CSS pixel width accurate (do not force 980px desktop wide viewport)
                     useWideViewPort = false
                     loadWithOverviewMode = false
