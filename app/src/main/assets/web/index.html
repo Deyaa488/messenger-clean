@@ -517,12 +517,12 @@ body {
 .msg-deleted .msg-bubble svg { width: 14px; height: 14px; }
 
 /* Emoji rendering */
-img.emoji {
+img.emoji, .native-emoji {
   width: 1.15em; height: 1.15em;
   vertical-align: -0.2em; margin: 0 1px;
-  display: inline-block;
+  display: inline-block; unicode-bidi: isolate; filter: drop-shadow(0 1px 1.2px rgba(0,0,0,0.12)) saturate(1.06); pointer-events: none;
 }
-.msg-bubble.emoji-only img.emoji {
+.msg-bubble.emoji-only img.emoji, .msg-bubble.emoji-only .native-emoji {
   width: 2.4em; height: 2.4em;
   vertical-align: middle; margin: 0 2px;
 }
@@ -2318,7 +2318,8 @@ function compressImage(dataUrl, maxSize = 800, quality = 0.75) {
 /* ============================================================
    TWEMOJI
    ============================================================ */
-const TWEMOJI_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/';
+const TWEMOJI_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/'; const EMOJI_SEQ_REGEX = /(?:\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|(?:[\p{Extended_Pictographic}\p{Emoji_Presentation}](?:\p{Emoji_Modifier}|\uFE0F)?(?:\u200D[\p{Extended_Pictographic}\p{Emoji_Presentation}](?:\p{Emoji_Modifier}|\uFE0F)?)*))/gu;
+   if (!window.twemoji) window.twemoji = { parse: function(root, opts) { if (!root) return; const base = (opts && opts.base) || TWEMOJI_BASE; const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (node) => { const p = node.parentElement; if (!p || /^(SCRIPT|STYLE|TEXTAREA|INPUT)$/.test(p.tagName) || p.closest('.no-twemoji')) return NodeFilter.FILTER_REJECT; EMOJI_SEQ_REGEX.lastIndex = 0; return EMOJI_SEQ_REGEX.test(node.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP; } }); const nodes = []; let n; while ((n = walker.nextNode())) nodes.push(n); for (const tn of nodes) { const txt = tn.nodeValue; EMOJI_SEQ_REGEX.lastIndex = 0; let last = 0, m; const frag = document.createDocumentFragment(); while ((m = EMOJI_SEQ_REGEX.exec(txt)) !== null) { if (m.index > last) frag.appendChild(document.createTextNode(txt.slice(last, m.index))); const raw = m[0]; const hasZwj = raw.includes('\u200D'); const cps = []; for (const ch of raw) { const c = ch.codePointAt(0); if (!hasZwj && c === 0xFE0F) continue; cps.push(c.toString(16)); } const cp = cps.join('-'); const img = document.createElement('img'); img.className = (opts && opts.className) || 'emoji'; img.draggable = false; img.alt = raw; img.dataset.unicode = raw; img.src = `${base}svg/${cp}.svg`; img.decoding = 'async'; frag.appendChild(img); last = m.index + raw.length; } if (last < txt.length) frag.appendChild(document.createTextNode(txt.slice(last))); if (tn.parentNode) tn.parentNode.replaceChild(frag, tn); } } };
 function renderTwemoji(root) {
   if (!root || !window.twemoji) return;
   try {
@@ -2328,27 +2329,14 @@ function renderTwemoji(root) {
 document.addEventListener('error', (e) => {
   const t = e.target;
   if (!t || t.tagName !== 'IMG' || !t.classList || !t.classList.contains('emoji')) return;
-  const src = t.getAttribute('src') || '';
-  const m = src.match(/([0-9a-f-]+)\.svg(?:\?|$)/i);
-  if (!m) return;
-  try {
-    const cp = m[1].split('-').map(x => parseInt(x, 16));
-    const emoji = String.fromCodePoint(...cp);
-    const span = document.createElement('span');
-    span.textContent = emoji;
-    span.className = 'native-emoji';
-    span.style.fontSize = '1.15em';
-    span.style.display = 'inline-block';
-    span.style.verticalAlign = '-0.2em';
-    t.replaceWith(span);
-  } catch (err) {}
+const alt = t.getAttribute('alt') || (t.dataset && t.dataset.unicode) || ''; if (!alt) return; const span = document.createElement('span'); span.className = 'emoji native-emoji'; span.dataset.unicode = alt; span.textContent = alt; t.replaceWith(span);
 }, true);
 
-const EMOJI_REGEX = /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/gu;
+const EMOJI_REGEX = EMOJI_SEQ_REGEX;
 function countEmojis(text) { return (text.match(EMOJI_REGEX) || []).length; }
 function isEmojiOnly(text) {
   if (!text) return false;
-  const stripped = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F\u200D\s\u20E3]/gu, '');
+  const stripped = text.replace(EMOJI_SEQ_REGEX, '').replace(/\s+/g, '');
   if (stripped.length > 0) return false;
   const c = countEmojis(text);
   return c > 0 && c <= 3;
@@ -2615,7 +2603,7 @@ function renderConversations() {
         </div>
       </div>`;
   }).join('');
-  requestAnimationFrame(() => layoutTinyTexts(list));
+  requestAnimationFrame(() => layoutTinyTexts(list)); renderTwemoji(list);
              }
 
 /* ============================================================
@@ -2654,7 +2642,7 @@ function renderChat() {
     const [c1, c2] = (conv.id === 'nearby' || conv.isRoom) ? ['#0ea5e9', '#6366f1'] : getAvatarGradient(displayTitle);
     avatarEl.outerHTML = `<div class="avatar" id="chatAvatar" style="cursor:pointer;background:linear-gradient(135deg,${c1},${c2});">${(conv.id === 'nearby' || conv.isRoom) ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' : escapeHtml(getInitial(displayTitle))}</div>`;
   }
-  $('#chatName').textContent = displayTitle;
+  $('#chatName').textContent = displayTitle; renderTwemoji($('#chatName'));
   const statusEl = $('#chatStatus');
   const isTypingNow = uiState.typingConvs && uiState.typingConvs.has(conv.id);
   if (isTypingNow) {
@@ -2886,7 +2874,7 @@ function displayToast(msg, type, duration, key) {
   const icons = { success: '#i-check', error: '#i-info', info: '#i-info' };
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<svg><use href="${icons[type] || icons.info}"/></svg><span>${escapeHtml(msg)}</span>`;
+  el.innerHTML = `<svg><use href="${icons[type] || icons.info}"/></svg><span>${escapeHtml(msg)}</span>`; renderTwemoji(el);
   container.appendChild(el);
   activeToasts.set(key, el);
   setTimeout(() => {
@@ -2928,7 +2916,8 @@ function showContextMenu(x, y, items) {
       <span>${escapeHtml(it.label)}</span>
     </button>`;
   }).join('');
-  menu.classList.add('active');
+  renderTwemoji(menu);
+   menu.classList.add('active');
   const rect = menu.getBoundingClientRect();
   const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth; const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight; const bubbleEl = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(el => el.closest && el.closest('.msg-bubble, .msg-row')).find(Boolean); const bRect = bubbleEl ? bubbleEl.getBoundingClientRect() : null;
    let px = x, py = y;
@@ -3176,7 +3165,7 @@ function updateReplyPreview() {
   const senderName = msg.senderId === 'me' ? state.currentUser.name : contact.name;
   $('#replyPreviewName').textContent = senderName; let rThumb = el.querySelector('.reply-preview-thumb'); if (msg.type === 'image' && msg.data && !msg.viewOnce) { if (!rThumb) { rThumb = document.createElement('img'); rThumb.className = 'reply-preview-thumb'; rThumb.style.cssText = 'width:34px;height:34px;border-radius:6px;object-fit:cover;margin-inline-end:8px;flex-shrink:0;'; el.insertBefore(rThumb, el.firstChild); } rThumb.src = msg.data; rThumb.hidden = false; } else if (rThumb) { rThumb.hidden = true; }
   if (msg.isTiny || /^\u2063TINY/.test(msg.text || '')) { const sc = clampTinyScale(state.settings?.tinyScale ?? 80); const tk = Math.max(0.0005, tinyScaleToPx(sc) / TINY_REF_PX); $('#replyPreviewText').innerHTML = `<span class="tiny-text" data-tiny-scale="${sc}" data-tiny-k="${tk}"><span class="tiny-inner" style="transform:scale(${tk});">${escapeHtml(previewText(msg))}</span></span>`; requestAnimationFrame(() => layoutTinyTexts(el)); } else { $('#replyPreviewText').textContent = previewText(msg); }
-  el.hidden = false;
+  el.hidden = false; renderTwemoji(el);
 }
 
 function updateAttachmentPreview() {
@@ -4121,7 +4110,7 @@ function updateUserUI() {
   } else {
     myAvatar.outerHTML = `<div class="avatar" id="myAvatar" style="background:linear-gradient(135deg,${c1},${c2});">${escapeHtml(getInitial(user.name))}</div>`;
   }
-  $('#myName').textContent = user.name;
+  $('#myName').textContent = user.name; renderTwemoji($('#myName'));
   if (user.bio) $('#myStatus').textContent = user.bio;
   const pa = $('#profileAvatar');
   if (user.avatar) {
