@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: build-apk-${{ github.ref }}
@@ -40,7 +40,7 @@ jobs:
 
       - name: Ensure gradlew is executable
         run: |
-          git fetch origin backup/before-emoji-unification-04b67eb && git checkout origin/backup/before-emoji-unification-04b67eb -- app/src/main/assets/web/index.html app/src/main/java/app/getknit/knit/ui/custom/CustomMessengerScreen.kt .github/workflows/build-apk.yml && git config user.name "Deyaa488" && git config user.email "Deyaa488@users.noreply.github.com" && git add app/src/main/assets/web/index.html app/src/main/java/app/getknit/knit/ui/custom/CustomMessengerScreen.kt .github/workflows/build-apk.yml && git commit -m "Revert to stable pre-emoji version (backup/before-emoji-unification-04b67eb)" && git push origin HEAD:feature/clean-android-upload-fresh && chmod +x gradlew
+          chmod +x gradlew
           ls -l gradlew
           test -x gradlew
 
@@ -61,7 +61,7 @@ jobs:
       - name: Verify Produced APKs
         run: |
           ls -lh app/build/outputs/apk/staging/*.apk app/build/outputs/apk/debug/*.apk 
-          APK_PATH=$(ls app/build/outputs/apk/staging/app-staging.apk 2>/dev/null || ls app/build/outputs/apk/staging/*.apk | head -n 1) && unzip -p "$APK_PATH" assets/web/index.html > /tmp/apk-index.html && echo "Packaged SVGs: $(unzip -l "$APK_PATH" | grep "assets/web/emoji/svg/" | wc -l)" && for s in 1f600.svg 1f602.svg 1f979.svg 1fae0.svg 1fae8.svg 1fae9.svg 1faea.svg 1f9d1-200d-1f9d1-200d-1f9d2-200d-1f9d2.svg 1f468-1f3fd-200d-1f91d-200d-1f468-1f3fb.svg 1f3f3-fe0f-200d-1f308.svg 1f1f2-1f1e6.svg 2764.svg 2764-fe0f-200d-1f525.svg 1f469-200d-1f4bb.svg; do unzip -l "$APK_PATH" | grep -q "assets/web/emoji/svg/$s" || exit 1; done
+          APK_PATH=$(ls app/build/outputs/apk/staging/app-staging.apk 2>/dev/null || ls app/build/outputs/apk/staging/*.apk | head -n 1) && unzip -p "$APK_PATH" assets/web/index.html > /tmp/apk-index.html
           node -e 'const fs=require("fs");for(const p of ["app/src/main/assets/web/index.html","/tmp/apk-index.html"]){const h=fs.readFileSync(p,"utf8");for(const t of ["style","script","body"]){const o=(h.match(new RegExp("<"+t+"(?:\\s|>)","gi"))||[]).length,c=(h.match(new RegExp("</"+t+">","gi"))||[]).length;console.log(p,t,"open="+o,"close="+c);if(o!==c||o===0)throw new Error(p+" unbalanced "+t);}const m=[...h.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)];m.forEach((x,i)=>{if(x[1].trim()){new (require("vm")).Script(x[1]);console.log(p,"script#"+i,"OK","len="+x[1].length);}});}'
 
       - name: Upload Optimized Staging APK

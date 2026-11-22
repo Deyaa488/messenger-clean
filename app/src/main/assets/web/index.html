@@ -517,12 +517,12 @@ body {
 .msg-deleted .msg-bubble svg { width: 14px; height: 14px; }
 
 /* Emoji rendering */
-img.emoji, .native-emoji {
+img.emoji {
   width: 1.15em; height: 1.15em;
   vertical-align: -0.2em; margin: 0 1px;
-  display: inline-block; unicode-bidi: isolate; filter: drop-shadow(0 1px 1.2px rgba(0,0,0,0.12)) saturate(1.06); pointer-events: none;
+  display: inline-block;
 }
-.msg-bubble.emoji-only img.emoji, .msg-bubble.emoji-only .native-emoji {
+.msg-bubble.emoji-only img.emoji {
   width: 2.4em; height: 2.4em;
   vertical-align: middle; margin: 0 2px;
 }
@@ -2318,173 +2318,41 @@ function compressImage(dataUrl, maxSize = 800, quality = 0.75) {
 /* ============================================================
    TWEMOJI
    ============================================================ */
-const TWEMOJI_CDN_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/';
-const TWEMOJI_LOCAL_BASE = 'emoji/';
-const TWEMOJI_BASE = TWEMOJI_LOCAL_BASE;
-const UNJOINED_COMPOUND_MAP = {
-  '\u{1F9D1}\u{1F9D1}\u{1F9D2}\u{1F9D2}':'1f9d1-200d-1f9d1-200d-1f9d2-200d-1f9d2',
-  '\u{1F9D1}\u{1F9D1}\u{1F9D2}':'1f9d1-200d-1f9d1-200d-1f9d2',
-  '\u{1F9D1}\u{1F9D2}\u{1F9D2}':'1f9d1-200d-1f9d2-200d-1f9d2',
-  '\u{1F9D1}\u{1F9D2}':'1f9d1-200d-1f9d2',
-  '\u{1F468}\u{1F3FD}\u{1F91D}\u{1F468}\u{1F3FB}':'1f468-1f3fd-200d-1f91d-200d-1f468-1f3fb',
-  '\u{1F3F3}\uFE0F\u{1F308}':'1f3f3-fe0f-200d-1f308','\u{1F3F3}\u{1F308}':'1f3f3-fe0f-200d-1f308',
-  '\u{1F3F3}\uFE0F\u26A7\uFE0F':'1f3f3-fe0f-200d-26a7-fe0f','\u{1F3F3}\u26A7':'1f3f3-fe0f-200d-26a7-fe0f',
-  '\u2764\uFE0F\u{1F525}':'2764-fe0f-200d-1f525','\u2764\u{1F525}':'2764-fe0f-200d-1f525',
-  '\u2764\uFE0F\u{1FA79}':'2764-fe0f-200d-1fa79','\u2764\u{1FA79}':'2764-fe0f-200d-1fa79',
-  '\u{1F469}\u{1F4BB}':'1f469-200d-1f4bb','\u{1F468}\u{1F4BB}':'1f468-200d-1f4bb','\u{1F9D1}\u{1F4BB}':'1f9d1-200d-1f4bb'
-};
-const EMOJI_SEQ_REGEX = /(?:\u{1F9D1}\u{1F9D1}\u{1F9D2}\u{1F9D2}|\u{1F9D1}\u{1F9D1}\u{1F9D2}|\u{1F9D1}\u{1F9D2}\u{1F9D2}|\u{1F9D1}\u{1F9D2}|[\u{1F468}\u{1F469}\u{1F9D1}]\p{Emoji_Modifier}?\u{1F91D}[\u{1F468}\u{1F469}\u{1F9D1}]\p{Emoji_Modifier}?|\u{1F3F3}\uFE0F?(?:\u{1F308}|\u26A7\uFE0F?)|\u2764\uFE0F?(?:\u{1F525}|\u{1FA79})|[\u{1F468}\u{1F469}\u{1F9D1}]\p{Emoji_Modifier}?\u{1F4BB}|\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|(?:[\p{Extended_Pictographic}\p{Emoji_Presentation}\u{1F000}-\u{1FAFF}\u2600-\u27BF\u2300-\u23FF\u2B50\u2B55](?:\p{Emoji_Modifier}|\uFE0F)?(?:\u200D[\p{Extended_Pictographic}\p{Emoji_Presentation}\u{1F000}-\u{1FAFF}\u2600-\u27BF\u2194-\u2199\u27A1\u2B05-\u2B07\u2B1B\u2B1C](?:\p{Emoji_Modifier}|\uFE0F)?)*))/gu;
-function emojiToCodePoint(raw) {
-  if (!raw) return '';
-  if (UNJOINED_COMPOUND_MAP[raw]) return UNJOINED_COMPOUND_MAP[raw];
-  if (!raw.includes('\u200D') && raw.includes('\u{1F91D}')) return emojiToCodePoint(raw.replace(/\u{1F91D}/u, '\u200D\u{1F91D}\u200D'));
-  if (!raw.includes('\u200D') && /^[\u{1F468}\u{1F469}\u{1F9D1}]\p{Emoji_Modifier}?\u{1F4BB}$/u.test(raw)) return emojiToCodePoint(raw.replace(/\u{1F4BB}$/u, '\u200D\u{1F4BB}'));
-  const z = raw.includes('\u200D'), cps = [];
-  for (const ch of raw) { const c = ch.codePointAt(0); if (!z && c === 0xFE0F) continue; cps.push(c.toString(16)); }
-  const cp = cps.join('-');
-  return z ? cp.replace(/^(2764|1f3f3)-200d-/, '$1-fe0f-200d-').replace(/^1f441-200d-1f5e8$/, '1f441-fe0f-200d-1f5e8-fe0f') : cp;
+const TWEMOJI_BASE = 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.0.3/assets/';
+function renderTwemoji(root) {
+  if (!root || !window.twemoji) return;
+  try {
+    window.twemoji.parse(root, { folder: 'svg', ext: '.svg', base: TWEMOJI_BASE, className: 'emoji' });
+  } catch (e) {}
 }
-window.twemoji = {
-  base: TWEMOJI_BASE, ext: '.svg', size: 'svg', convert: { toCodePoint: emojiToCodePoint },
-  parse(root, opts) {
-    if (!root || root.nodeType !== 1) return root;
-    const b = (opts && opts.base) || TWEMOJI_BASE, f = (opts && opts.folder !== undefined) ? opts.folder : 'svg', cls = (opts && opts.className) || 'emoji', pfx = f ? b + f + '/' : b;
-    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => { const p = n.parentElement; if (!p || /^(SCRIPT|STYLE|TEXTAREA|INPUT|CODE|PRE|SVG)$/.test(p.tagName) || p.closest('.no-twemoji,.native-emoji')) return 2; EMOJI_SEQ_REGEX.lastIndex = 0; return EMOJI_SEQ_REGEX.test(n.nodeValue) ? 1 : 3; } });
-    const list = []; let n; while ((n = w.nextNode())) list.push(n);
-    for (const tn of list) {
-      const t = tn.nodeValue; EMOJI_SEQ_REGEX.lastIndex = 0; let last = 0, m, frag = document.createDocumentFragment();
-      while ((m = EMOJI_SEQ_REGEX.exec(t)) !== null) {
-        if (m.index > last) frag.appendChild(document.createTextNode(t.slice(last, m.index)));
-        const raw = m[0], cp = emojiToCodePoint(raw), img = document.createElement('img');
-        img.className = cls; img.draggable = false; img.alt = raw; img.dataset.unicode = raw; img.dataset.cp = cp; img.src = pfx + cp + '.svg'; img.decoding = 'async';
-        frag.appendChild(img); last = m.index + raw.length;
-      }
-      if (last < t.length) frag.appendChild(document.createTextNode(t.slice(last)));
-      if (tn.parentNode) tn.parentNode.replaceChild(frag, tn);
-    }
-    return root;
-  }
-};
-function renderTwemoji(r) { if (r && window.twemoji) try { window.twemoji.parse(r, { folder: 'svg', ext: '.svg', base: TWEMOJI_BASE, className: 'emoji' }); } catch (_) {} }
 document.addEventListener('error', (e) => {
-  const t = e.target; if (!t || t.tagName !== 'IMG' || !t.classList || !t.classList.contains('emoji')) return;
-  const cp = t.dataset.cp || '', st = Number(t.dataset.fb || 0), altCp = cp.includes('-fe0f') ? cp.replace(/-fe0f/g, '') : cp.replace(/^(2764|1f3f3|1f441)-/, '$1-fe0f-');
-  if (cp && st === 0 && altCp !== cp) { t.dataset.fb = '1'; t.src = TWEMOJI_LOCAL_BASE + 'svg/' + altCp + '.svg'; return; }
-  if (cp && st <= 1) { t.dataset.fb = '2'; t.src = TWEMOJI_CDN_BASE + 'svg/' + cp + '.svg'; return; }
-  if (cp && st === 2 && altCp !== cp) { t.dataset.fb = '3'; t.src = TWEMOJI_CDN_BASE + 'svg/' + altCp + '.svg'; return; }
-  const alt = t.getAttribute('alt') || (t.dataset && t.dataset.unicode) || ''; if (!alt) { t.style.display = 'none'; return; }
-  const sp = document.createElement('span'); sp.className = 'emoji native-emoji'; sp.dataset.unicode = alt; sp.textContent = alt; t.replaceWith(sp);
+  const t = e.target;
+  if (!t || t.tagName !== 'IMG' || !t.classList || !t.classList.contains('emoji')) return;
+  const src = t.getAttribute('src') || '';
+  const m = src.match(/([0-9a-f-]+)\.svg(?:\?|$)/i);
+  if (!m) return;
+  try {
+    const cp = m[1].split('-').map(x => parseInt(x, 16));
+    const emoji = String.fromCodePoint(...cp);
+    const span = document.createElement('span');
+    span.textContent = emoji;
+    span.className = 'native-emoji';
+    span.style.fontSize = '1.15em';
+    span.style.display = 'inline-block';
+    span.style.verticalAlign = '-0.2em';
+    t.replaceWith(span);
+  } catch (err) {}
 }, true);
-const EMOJI_REGEX = EMOJI_SEQ_REGEX;
-function countEmojis(t) { return (String(t || '').match(EMOJI_REGEX) || []).length; }
-function isEmojiOnlyText(t) { if (!t || String(t).replace(EMOJI_SEQ_REGEX, '').replace(/[\s\uFE0E\uFE0F\u200D]/g, '').length > 0) return false; const c = countEmojis(t); return c > 0 && c <= 6; }
-function nodeU16(n) { return n.nodeType === 3 ? n.nodeValue.length : n.nodeType !== 1 ? 0 : (n.tagName === 'IMG' && n.classList.contains('emoji')) || (n.classList && n.classList.contains('native-emoji')) ? (n.dataset.unicode || n.alt || n.textContent || '').length : n.tagName === 'BR' ? 1 : Array.from(n.childNodes).reduce((s, c) => s + nodeU16(c), 0); }
-function serializeLiveEditor(ed, stopC, stopO) {
-  let out = '', hit = false;
-  const walk = (p) => {
-    const ch = p.childNodes;
-    for (let i = 0; i < ch.length; i++) {
-      if (hit) return;
-      if (p === stopC && i === stopO) { hit = true; return; }
-      const n = ch[i];
-      if (n === stopC) {
-        if (n.nodeType === 3) out += n.nodeValue.slice(0, stopO);
-        else for (let j = 0; j < Math.min(stopO, n.childNodes.length); j++) walk({ childNodes: [n.childNodes[j]] });
-        hit = true; return;
-      }
-      if (n.nodeType === 3) out += n.nodeValue;
-      else if (n.nodeType === 1) {
-        if ((n.tagName === 'IMG' && n.classList.contains('emoji')) || (n.classList && n.classList.contains('native-emoji'))) out += n.dataset.unicode || n.alt || n.textContent || '';
-        else if (n.tagName === 'BR') { if (i < ch.length - 1 || n.dataset.u === '1') out += '\n'; }
-        else { if ((n.tagName === 'DIV' || n.tagName === 'P') && out && !out.endsWith('\n')) out += '\n'; walk(n); }
-      }
-    }
-    if (p === stopC) hit = true;
-  };
-  walk(ed); return out.replace(/\u00A0/g, ' ');
+
+const EMOJI_REGEX = /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/gu;
+function countEmojis(text) { return (text.match(EMOJI_REGEX) || []).length; }
+function isEmojiOnly(text) {
+  if (!text) return false;
+  const stripped = text.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}\uFE0F\u200D\s\u20E3]/gu, '');
+  if (stripped.length > 0) return false;
+  const c = countEmojis(text);
+  return c > 0 && c <= 3;
 }
-function getEdSel(ed) {
-  const sel = window.getSelection();
-  if (sel && sel.rangeCount > 0) { const r = sel.getRangeAt(0); if (ed.contains(r.startContainer) && ed.contains(r.endContainer)) { const a = serializeLiveEditor(ed, r.startContainer, r.startOffset).length, b = serializeLiveEditor(ed, r.endContainer, r.endOffset).length; ed._s = Math.min(a, b); ed._e = Math.max(a, b); return { start: ed._s, end: ed._e }; } }
-  const l = serializeLiveEditor(ed).length, s = typeof ed._s === 'number' ? Math.min(ed._s, l) : l; return { start: s, end: typeof ed._e === 'number' ? Math.min(ed._e, l) : s };
-}
-function setEdSel(ed, s, e = s) {
-  const l = serializeLiveEditor(ed).length; ed._s = Math.max(0, Math.min(s, l)); ed._e = Math.max(ed._s, Math.min(e, l));
-  const pt = (pos) => { let rem = pos, ch = ed.childNodes; for (let i = 0; i < ch.length; i++) { const n = ch[i]; if (n.nodeType === 3) { if (rem <= n.nodeValue.length) return [n, rem]; rem -= n.nodeValue.length; } else { const u = nodeU16(n); if (rem === 0) return [ed, i]; if (rem <= u) return [ed, i + 1]; rem -= u; } } return [ed, ch.length]; };
-  try { const [c1, o1] = pt(ed._s), [c2, o2] = pt(ed._e), r = document.createRange(); r.setStart(c1, o1); r.setEnd(c2, o2); const sel = window.getSelection(); if (sel) { sel.removeAllRanges(); sel.addRange(r); } } catch (_) {}
-}
-function fillEd(ed, txt, multi) {
-  const str = String(txt ?? ''); ed.innerHTML = ''; if (!str) { ed._s = ed._e = 0; return; }
-  (multi ? str.split('\n') : [str.replace(/\r?\n/g, ' ')]).forEach((ln, i, a) => { if (ln) ed.appendChild(document.createTextNode(ln)); if (multi && i < a.length - 1) { const b = document.createElement('br'); b.dataset.u = '1'; ed.appendChild(b); } });
-  renderTwemoji(ed);
-}
-function attachLiveEmojiInput(el) {
-  if (!el || el._liveEmojiEditor) return;
-  const multi = el.tagName === 'TEXTAREA', ed = document.createElement('div');
-  ed.className = (el.className + ' emoji-live-editor ' + (multi ? 'multiline' : 'singleline')).trim();
-  ed.contentEditable = 'true'; ed.dir = 'auto'; ed.dataset.placeholder = el.getAttribute('placeholder') || ''; ed._s = ed._e = 0; ed._comp = false;
-  el.parentNode.insertBefore(ed, el); el.classList.add('emoji-backing-input'); el.tabIndex = -1; el._liveEmojiEditor = ed;
-  const desc = Object.getOwnPropertyDescriptor(multi ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value');
-  const fit = () => { if (multi) { ed.style.height = 'auto'; if (!ed.classList.contains('tiny-mode')) ed.style.height = Math.min(Math.max(ed.scrollHeight, 40), 160) + 'px'; } };
-  const sync = (fire = true) => { const v = serializeLiveEditor(ed); if (desc && desc.set) desc.set.call(el, v); if (!v && ed.innerHTML) ed.innerHTML = ''; fit(); if (fire) el.dispatchEvent(new Event('input', { bubbles: true })); if (el.id === 'msgInput') { const tm = document.getElementById('tinyMirrorInner'); if (tm) renderTwemoji(tm); } };
-  Object.defineProperty(el, 'value', { configurable: true, enumerable: true, get: () => serializeLiveEditor(ed), set(v) { const s = String(v ?? ''); if (desc && desc.set) desc.set.call(el, s); fillEd(ed, s, multi); ed._s = ed._e = s.length; fit(); if (el.id === 'msgInput') { const tm = document.getElementById('tinyMirrorInner'); if (tm) renderTwemoji(tm); } } });
-  Object.defineProperty(el, 'selectionStart', { configurable: true, get: () => getEdSel(ed).start, set(p) { const n = Number(p) || 0; setEdSel(ed, n, Math.max(n, ed._e || n)); } });
-  Object.defineProperty(el, 'selectionEnd', { configurable: true, get: () => getEdSel(ed).end, set(p) { const n = Number(p) || 0; setEdSel(ed, Math.min(ed._s || 0, n), n); } });
-  Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => ed.scrollHeight || 40 });
-  el.focus = (o) => ed.focus(o); el.blur = () => ed.blur();
-  if (desc && desc.get && desc.get.call(el)) el.value = desc.get.call(el);
-  new MutationObserver(() => { ed.classList.toggle('tiny-mode', el.classList.contains('tiny-mode')); ed.dataset.placeholder = el.getAttribute('placeholder') || ''; }).observe(el, { attributes: true, attributeFilter: ['class', 'placeholder'] });
-  const delAdj = (back) => {
-    const sel = window.getSelection(); if (!sel || !sel.rangeCount || !sel.isCollapsed) return false;
-    const r = sel.getRangeAt(0), { start } = getEdSel(ed), sc = r.startContainer, so = r.startOffset;
-    const adj = back ? (sc === ed && so > 0 ? ed.childNodes[so - 1] : (sc.nodeType === 3 && so === 0 ? sc.previousSibling : null)) : (sc === ed && so < ed.childNodes.length ? ed.childNodes[so] : (sc.nodeType === 3 && so === sc.nodeValue.length ? sc.nextSibling : null));
-    if (adj && adj.nodeType === 1 && (adj.classList.contains('emoji') || adj.tagName === 'BR')) { const u = nodeU16(adj); adj.remove(); setEdSel(ed, back ? Math.max(0, start - u) : start); sync(true); return true; }
-    return false;
-  };
-  ed.addEventListener('beforeinput', (e) => { if (!ed._comp && ((e.inputType === 'deleteContentBackward' && delAdj(true)) || (e.inputType === 'deleteContentForward' && delAdj(false)))) e.preventDefault(); });
-  ed.addEventListener('compositionstart', () => { ed._comp = true; });
-  const onIn = () => { if (!ed._comp) { EMOJI_SEQ_REGEX.lastIndex = 0; if (EMOJI_SEQ_REGEX.test(ed.textContent)) { const { start, end } = getEdSel(ed); renderTwemoji(ed); setEdSel(ed, start, end); } } getEdSel(ed); sync(true); };
-  ed.addEventListener('compositionend', () => { ed._comp = false; onIn(); });
-  ed.addEventListener('input', onIn);
-  ed.addEventListener('keydown', (e) => {
-    if (!ed._comp && (e.key === 'Backspace' || e.key === 'Delete') && delAdj(e.key === 'Backspace')) { e.preventDefault(); return; }
-    if (e.key === 'Enter') {
-      const f = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', shiftKey: e.shiftKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, bubbles: true, cancelable: true });
-      el.dispatchEvent(f); if (f.defaultPrevented || !multi) { e.preventDefault(); return; }
-      e.preventDefault(); const { start, end } = getEdSel(ed), cur = serializeLiveEditor(ed); fillEd(ed, cur.slice(0, start) + '\n' + cur.slice(end), true); setEdSel(ed, start + 1, start + 1); sync(true);
-    }
-  });
-  ['keyup','mouseup','touchend','focus'].forEach(ev => ed.addEventListener(ev, () => getEdSel(ed)));
-  ed.addEventListener('copy', (e) => { const s = window.getSelection(); if (!s || !s.rangeCount || s.isCollapsed) return; e.preventDefault(); const d = document.createElement('div'); d.appendChild(s.getRangeAt(0).cloneContents()); if (e.clipboardData) e.clipboardData.setData('text/plain', serializeLiveEditor(d)); });
-  ed.addEventListener('cut', (e) => { const s = window.getSelection(); if (!s || !s.rangeCount || s.isCollapsed) return; e.preventDefault(); const { start, end } = getEdSel(ed), cur = serializeLiveEditor(ed); if (e.clipboardData) e.clipboardData.setData('text/plain', cur.slice(start, end)); fillEd(ed, cur.slice(0, start) + cur.slice(end), multi); setEdSel(ed, start, start); sync(true); });
-  ed.addEventListener('paste', (e) => { e.preventDefault(); const p = (e.clipboardData || window.clipboardData)?.getData('text/plain') || ''; if (!p) return; const cl = multi ? p : p.replace(/\r?\n/g, ' '), { start, end } = getEdSel(ed), cur = serializeLiveEditor(ed); fillEd(ed, cur.slice(0, start) + cl + cur.slice(end), multi); setEdSel(ed, start + cl.length, start + cl.length); sync(true); });
-}
-(function setupKnitEmojiV2() {
-  const st = document.createElement('style'); st.id = 'knit-emoji-v2-css';
-  st.textContent = 'img.emoji{width:1.22em;height:1.22em;vertical-align:-0.22em;margin:0 1px;display:inline-block;object-fit:contain;unicode-bidi:isolate;pointer-events:none;-webkit-user-drag:none;filter:url(#knit-emoji-3d) drop-shadow(0 1.2px 1.5px rgba(0,0,0,0.22)) saturate(1.16) contrast(1.04);transform:translateZ(0)}.msg-bubble.emoji-only img.emoji,.msg-bubble.emoji-only .native-emoji{width:2.45em;height:2.45em;vertical-align:middle;margin:0 2px;filter:url(#knit-emoji-3d) drop-shadow(0 2.5px 4px rgba(0,0,0,0.26)) saturate(1.18) contrast(1.05)}.emoji-backing-input{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;opacity:0!important;pointer-events:none!important}.emoji-live-editor{cursor:text;outline:none;-webkit-user-select:text!important;user-select:text!important;-webkit-touch-callout:default!important;unicode-bidi:plaintext;text-align:start;box-sizing:border-box}.emoji-live-editor.multiline{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;overflow-y:auto;overflow-x:hidden}.emoji-live-editor.singleline{white-space:nowrap;overflow-x:auto;overflow-y:hidden;display:flex;align-items:center}.emoji-live-editor.singleline::-webkit-scrollbar{display:none}.emoji-live-editor:empty::before{content:attr(data-placeholder);color:var(--text-2);opacity:0.75;pointer-events:none}.chat-search-wrap .emoji-live-editor{flex:1;padding:8px 12px;background:var(--surface-2);border-radius:10px;font-size:14px;color:var(--text);min-height:36px}.emoji-search-row .emoji-live-editor{width:100%;padding:8px 12px;background:var(--surface-2);border-radius:10px;font-size:13.5px;color:var(--text);min-height:34px}.emoji-live-editor.tiny-mode{color:transparent!important;-webkit-text-fill-color:transparent!important;caret-color:var(--text)!important}.emoji-live-editor.tiny-mode img.emoji{opacity:0!important}.emoji-live-editor.tiny-mode:empty::before{color:var(--text-2)!important;-webkit-text-fill-color:var(--text-2)!important}';
-  document.head.appendChild(st);
-  const boot = () => {
-    if (!document.getElementById('knit-emoji-3d-svg') && document.body) {
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.id = 'knit-emoji-3d-svg'; svg.setAttribute('width', '0'); svg.setAttribute('height', '0'); svg.style.cssText = 'position:absolute;width:0;height:0;pointer-events:none;overflow:hidden;'; svg.setAttribute('aria-hidden', 'true');
-      svg.innerHTML = '<defs><filter id="knit-emoji-3d" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceAlpha" stdDeviation="1.15" result="b"/><feSpecularLighting in="b" surfaceScale="2.8" specularConstant="0.48" specularExponent="20" lighting-color="#ffffff" result="s"><fePointLight x="-16" y="-22" z="32"/></feSpecularLighting><feComposite in="s" in2="SourceAlpha" operator="in" result="sc"/><feComposite in="SourceGraphic" in2="sc" operator="arithmetic" k1="0" k2="1" k3="0.42" k4="0"/></filter></defs>';
-      document.body.appendChild(svg);
-    }
-    ['msgInput','searchInput','chatSearchInput','emojiSearch','newChatSearch','groupNameInput','profileNameInput','profileBioInput'].forEach(id => { const el = document.getElementById(id); if (el) attachLiveEmojiInput(el); });
-    if (typeof EMOJIS === 'object' && EMOJIS) {
-      const fk = Object.keys(EMOJIS)[0], hk = Object.keys(EMOJIS).find(k => k.includes('\u2764'));
-      if (fk && Array.isArray(EMOJIS[fk])) ['\u{1F979}','\u{1FAE0}','\u{1FAE8}','\u{1FAE9}','\u{1FAEA}','\u{1F469}\u200D\u{1F4BB}','\u{1F9D1}\u200D\u{1F9D1}\u200D\u{1F9D2}\u200D\u{1F9D2}','\u{1F468}\u{1F3FD}\u200D\u{1F91D}\u200D\u{1F468}\u{1F3FB}'].forEach(e => { if (!EMOJIS[fk].includes(e)) EMOJIS[fk].unshift(e); });
-      if (hk && Array.isArray(EMOJIS[hk])) ['\u2764\uFE0F\u200D\u{1F525}','\u2764\uFE0F\u200D\u{1FA79}','\u{1F3F3}\uFE0F\u200D\u{1F308}','\u{1F1F2}\u{1F1E6}'].forEach(e => { if (!EMOJIS[hk].includes(e)) EMOJIS[hk].unshift(e); });
-    }
-    const domObs = new MutationObserver((muts) => {
-      for (const m of muts) for (const n of m.addedNodes) {
-        if (n.nodeType === 1) { if (!(n.tagName === 'IMG' && n.classList.contains('emoji')) && !n.closest('.emoji-live-editor')) renderTwemoji(n); }
-        else if (n.nodeType === 3 && n.parentElement && !n.parentElement.closest('.emoji-live-editor,.native-emoji')) { EMOJI_SEQ_REGEX.lastIndex = 0; if (EMOJI_SEQ_REGEX.test(n.nodeValue)) renderTwemoji(n.parentElement); }
-      }
-    });
-    ['messages','convList','replyPreview','chatName','myName','newChatList','contextMenu'].forEach(id => { const el = document.getElementById(id); if (el) { renderTwemoji(el); domObs.observe(el, { childList: true, subtree: true }); } });
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else setTimeout(boot, 0);
-})();
 
 /* ============================================================
    STATE
@@ -2747,7 +2615,7 @@ function renderConversations() {
         </div>
       </div>`;
   }).join('');
-  requestAnimationFrame(() => layoutTinyTexts(list)); renderTwemoji(list);
+  requestAnimationFrame(() => layoutTinyTexts(list));
              }
 
 /* ============================================================
@@ -2786,7 +2654,7 @@ function renderChat() {
     const [c1, c2] = (conv.id === 'nearby' || conv.isRoom) ? ['#0ea5e9', '#6366f1'] : getAvatarGradient(displayTitle);
     avatarEl.outerHTML = `<div class="avatar" id="chatAvatar" style="cursor:pointer;background:linear-gradient(135deg,${c1},${c2});">${(conv.id === 'nearby' || conv.isRoom) ? '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>' : escapeHtml(getInitial(displayTitle))}</div>`;
   }
-  $('#chatName').textContent = displayTitle; renderTwemoji($('#chatName'));
+  $('#chatName').textContent = displayTitle;
   const statusEl = $('#chatStatus');
   const isTypingNow = uiState.typingConvs && uiState.typingConvs.has(conv.id);
   if (isTypingNow) {
@@ -3018,7 +2886,7 @@ function displayToast(msg, type, duration, key) {
   const icons = { success: '#i-check', error: '#i-info', info: '#i-info' };
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  el.innerHTML = `<svg><use href="${icons[type] || icons.info}"/></svg><span>${escapeHtml(msg)}</span>`; renderTwemoji(el);
+  el.innerHTML = `<svg><use href="${icons[type] || icons.info}"/></svg><span>${escapeHtml(msg)}</span>`;
   container.appendChild(el);
   activeToasts.set(key, el);
   setTimeout(() => {
@@ -3060,8 +2928,7 @@ function showContextMenu(x, y, items) {
       <span>${escapeHtml(it.label)}</span>
     </button>`;
   }).join('');
-  renderTwemoji(menu);
-   menu.classList.add('active');
+  menu.classList.add('active');
   const rect = menu.getBoundingClientRect();
   const vw = window.visualViewport ? window.visualViewport.width : window.innerWidth; const vh = window.visualViewport ? window.visualViewport.height : window.innerHeight; const bubbleEl = (document.elementsFromPoint ? document.elementsFromPoint(x, y) : []).map(el => el.closest && el.closest('.msg-bubble, .msg-row')).find(Boolean); const bRect = bubbleEl ? bubbleEl.getBoundingClientRect() : null;
    let px = x, py = y;
@@ -3309,7 +3176,7 @@ function updateReplyPreview() {
   const senderName = msg.senderId === 'me' ? state.currentUser.name : contact.name;
   $('#replyPreviewName').textContent = senderName; let rThumb = el.querySelector('.reply-preview-thumb'); if (msg.type === 'image' && msg.data && !msg.viewOnce) { if (!rThumb) { rThumb = document.createElement('img'); rThumb.className = 'reply-preview-thumb'; rThumb.style.cssText = 'width:34px;height:34px;border-radius:6px;object-fit:cover;margin-inline-end:8px;flex-shrink:0;'; el.insertBefore(rThumb, el.firstChild); } rThumb.src = msg.data; rThumb.hidden = false; } else if (rThumb) { rThumb.hidden = true; }
   if (msg.isTiny || /^\u2063TINY/.test(msg.text || '')) { const sc = clampTinyScale(state.settings?.tinyScale ?? 80); const tk = Math.max(0.0005, tinyScaleToPx(sc) / TINY_REF_PX); $('#replyPreviewText').innerHTML = `<span class="tiny-text" data-tiny-scale="${sc}" data-tiny-k="${tk}"><span class="tiny-inner" style="transform:scale(${tk});">${escapeHtml(previewText(msg))}</span></span>`; requestAnimationFrame(() => layoutTinyTexts(el)); } else { $('#replyPreviewText').textContent = previewText(msg); }
-  el.hidden = false; renderTwemoji(el);
+  el.hidden = false;
 }
 
 function updateAttachmentPreview() {
@@ -4254,7 +4121,7 @@ function updateUserUI() {
   } else {
     myAvatar.outerHTML = `<div class="avatar" id="myAvatar" style="background:linear-gradient(135deg,${c1},${c2});">${escapeHtml(getInitial(user.name))}</div>`;
   }
-  $('#myName').textContent = user.name; renderTwemoji($('#myName'));
+  $('#myName').textContent = user.name;
   if (user.bio) $('#myStatus').textContent = user.bio;
   const pa = $('#profileAvatar');
   if (user.avatar) {
